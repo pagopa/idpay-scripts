@@ -60,7 +60,7 @@ PDND_BASE_URL = "PDND_BASE_URL"
 
 ## Chiave privata
 
-Il file `eservice-client-keypair.rsa.priv` deve contenere **solo** la chiave privata RSA in formato PEM:
+Aggiungere file `eservice-client-keypair.rsa.priv` deve contenere **solo** la chiave privata RSA in formato PEM:
 
 ```text
 -----BEGIN PRIVATE KEY-----
