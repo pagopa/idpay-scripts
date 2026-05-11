@@ -11,7 +11,7 @@ const SRC        = path.join(__dirname, 'view-subtask.js');
 const OUT_INLINE = path.join(__dirname, 'subtask.bookmarklet.inline.txt');
 const OUT_LOADER = path.join(__dirname, 'subtask.bookmarklet.loader.txt');
 // ⚠️ Cambia con l'URL raw pubblico del tuo subtask.js
-const REMOTE_URL = 'https://raw.githubusercontent.com/YOUR_ORG/YOUR_REPO/main/subtask.js';
+const REMOTE_URL = 'https://raw.githubusercontent.com/pagopa/idpay-scripts/refs/heads/main/jira/view-subtask.js';
 function minify(s) {
   return s
     .replace(/\/\*[\s\S]*?\*\//g, '')
