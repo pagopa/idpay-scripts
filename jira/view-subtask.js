@@ -592,7 +592,12 @@
       document.body.appendChild(panel);
       positionPanel();
 
-      // Riposiziona su scroll/resize finché il pannello è aperto.
+      // Riposiziona finché il pannello è aperto:
+      //  • scroll/resize della finestra
+      //  • scroll del container virtualizzato del backlog
+      //  • ResizeObserver sulla row: si attiva quando il backlog si
+      //    restringe perché Jira ha aperto il drawer laterale (la
+      //    window non emette resize in quel caso).
       const scroller = document.querySelector(
         '[data-testid="software-backlog.backlog-content.scrollable"]'
       );
@@ -600,10 +605,18 @@
       window.addEventListener('scroll', onMove, true);
       window.addEventListener('resize', onMove);
       if (scroller) scroller.addEventListener('scroll', onMove, { passive: true });
+      let resizeObs = null;
+      if (typeof ResizeObserver !== 'undefined') {
+        resizeObs = new ResizeObserver(onMove);
+        resizeObs.observe(row);
+        // Anche il body: il drawer laterale modifica il layout globale.
+        resizeObs.observe(document.body);
+      }
       cleanupReposition = () => {
         window.removeEventListener('scroll', onMove, true);
         window.removeEventListener('resize', onMove);
         if (scroller) scroller.removeEventListener('scroll', onMove);
+        if (resizeObs) resizeObs.disconnect();
       };
 
       open = true;
