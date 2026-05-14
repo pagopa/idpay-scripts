@@ -1,11 +1,20 @@
 // ─────────────────────────────────────────────────────────────────
 //  JIRA CLOUD — Subtask Expander per il Backlog  v4.0
-//  Selettori aggiornati al backlog moderno (software-backlog.card-list.*)
-//  - Mostra la freccia solo sulle issue con child-issues-metadata
-//  - Estrae la issue key dal data-testid della card
-//  - Endpoint API aggiornato a /rest/api/3/search/jql (POST) + fallback
-// ──────���──────────────────────────────────────────────────────────
-//  USO:  F12 → Console → incolla → Invio
+// ─────────────────────────────────────────────────────────────────
+//  Aggiunge una freccia ▶ accanto alle card del backlog che hanno
+//  child issues. Cliccandola si apre un mini-pannello con i subtask
+//  (key, titolo, stato, assegnatario) recuperati via REST.
+//  Cliccando la "key" di un subtask, la issue si apre nel drawer
+//  laterale di Jira (come per le card native del backlog).
+//
+//  ⚠️ La logica per aprire il drawer è NON banale: vedi il commento
+//     a `openIssueInSidePanel` PRIMA di toccarla.
+//
+//  USO:  F12 → Console → incolla view-subtask.js → Invio
+//        oppure usa il bookmarklet generato da build-bookmarklet.js.
+//
+//  DEBUG: imposta `const DEBUG = true` per loggare la sequenza di
+//         apertura del drawer (utile se Jira cambia struttura).
 // ─────────────────────────────────────────────────────────────────
 
 (function () {
@@ -19,6 +28,14 @@
   // Mostra la freccia SOLO sulle card che hanno l'indicatore child-issues.
   // Imposta a false per metterla su TUTTE le card del backlog.
   const ONLY_WITH_CHILDREN = true;
+
+  // Logging diagnostico verboso. Imposta a true SOLO per investigare
+  // problemi di apertura del side-panel (vedi openIssueInSidePanel).
+  const DEBUG = false;
+  const dlog  = (...a) => { if (DEBUG) console.log(...a); };
+  const dgrp  = (...a) => { if (DEBUG) console.group(...a); };
+  const dgrpe = ()      => { if (DEBUG) console.groupEnd(); };
+  const dwarn = (...a) => { if (DEBUG) console.warn(...a); };
 
   // ── CSS ─────────────────────────────────────────────────────────
   //  Usiamo le CSS variables di Atlassian Design System (--ds-*) così
@@ -58,14 +75,13 @@
       .jira-ste-btn.spin { animation: ste-spin .6s linear infinite; }
       @keyframes ste-spin { to { transform: translateY(-50%) rotate(360deg); } }
 
-      /* Popover sovrastante, ancorato alla card (data-ste-row è relative) */
+      /* Popover sovrastante: lo posizioniamo via JS in document.body con
+         position: fixed, per evitare che la card del backlog "consumi" i
+         click sui suoi figli (la card ha handler in capture phase che
+         aprirebbero il side-panel della task padre). */
       .jira-ste-panel {
-        position: absolute !important;
-        top: 100%;
-        left: 24px;
-        right: 8px;
-        margin-top: 2px;
-        z-index: 1000;
+        position: fixed !important;
+        z-index: 9999;
         max-height: 60vh;
         overflow-y: auto;
         border: 1px solid var(--ds-border, #C1C7D0);
@@ -231,9 +247,17 @@
 
     const row = document.createElement('div');
     row.className = 'jira-ste-row';
+    // NB: replichiamo gli attributi del link "key" nativo del backlog
+    //     (data-is-router-link + target="_self" + href relativo) così che
+    //     il router SPA di Jira intercetti il click e apra il side-panel,
+    //     invece di aprire una nuova tab o navigare a pagina piena.
     row.innerHTML = `
-      <a class="jira-ste-key" href="${BASE_URL}/browse/${esc(issue.key)}"
-         target="_blank" rel="noopener">${esc(issue.key)}</a>
+      <a class="jira-ste-key"
+         href="/browse/${esc(issue.key)}"
+         target="_self"
+         data-is-router-link="true"
+         data-ste-issue="${esc(issue.key)}"
+         rel="noopener">${esc(issue.key)}</a>
       <span class="jira-ste-summary" title="${esc(summary)}">${esc(summary)}</span>
       <span class="jira-ste-status" style="background:${bg};color:${fg}">${esc(status)}</span>
       <span class="jira-ste-assignee">
@@ -242,7 +266,229 @@
           : `<span class="jira-ste-avatar"></span>`}
         <span>${esc(assignee)}</span>
       </span>`;
+
+    const link = row.querySelector('.jira-ste-key');
+    // Click handler: replica il comportamento delle card native del
+    // backlog (apertura nel drawer laterale invece che navigazione
+    // a pagina piena). I click con modificatori (Ctrl/Cmd/Shift/Alt/
+    // middle-click) restano nativi → aprono in nuova tab/finestra
+    // grazie all'attributo href.
+    link.addEventListener('click', (e) => {
+      if (e.ctrlKey || e.metaKey || e.shiftKey || e.altKey || e.button !== 0) return;
+      // Blocca SOLO la navigazione di default (no stopPropagation:
+      // il diag listener globale, se attivo, deve comunque vedere il
+      // click per fini di debug).
+      e.preventDefault();
+      dgrp(`%c[Jira STE] 🖱️ click su subtask ${issue.key}`,
+        'color:#0052CC;font-weight:bold');
+      dlog('URL prima del click:', window.location.href);
+      dgrpe();
+      openIssueInSidePanel(issue.key);
+    });
     return row;
+  }
+
+  // ── Helper: estrai React props/fiber da un nodo DOM ──────────────
+  function getReactProps(el) {
+    const key = el && Object.keys(el).find(k => k.startsWith('__reactProps$'));
+    return key ? el[key] : null;
+  }
+  function getReactFiber(el) {
+    const key = el && Object.keys(el).find(
+      k => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$')
+    );
+    return key ? el[key] : null;
+  }
+
+  // ── Helper: cerca l'oggetto `history` di Jira nel fiber tree ─────
+  //  Risalendo dal fiber del proxy link, troviamo l'history wrapper
+  //  esposto dal router di Jira (history v4-like esteso con
+  //  refreshRoutes). Ci serve per chiamare .replace(path) dopo aver
+  //  acceso il drawer (vedi openIssueInSidePanel, Step B).
+  //
+  //  Firma riconosciuta: oggetto con push/replace + uno tra
+  //  createHref/length/action (proprio dell'history wrapper).
+  //
+  //  NOTA STORICA: in passato avevamo tentato di trovare anche un
+  //  oggetto `routerActions` (API alta di @atlassian/react-resource-
+  //  router). NON è esposto né in props né nel fiber: vive in uno
+  //  store sweet-state separato. Per questo motivo usiamo `history`
+  //  + il trucco Step A documentato in openIssueInSidePanel.
+  function findRouterFromFiber(startFiber) {
+    const isHistoryLike = (v) =>
+      v && typeof v === 'object' &&
+      typeof v.push === 'function' &&
+      typeof v.replace === 'function' &&
+      (typeof v.createHref === 'function' || 'length' in v || 'action' in v);
+
+    const seen = new WeakSet();
+    let f = startFiber;
+    let hopsUp = 0;
+    while (f && hopsUp < 300) {
+      hopsUp++;
+      const p = f.memoizedProps;
+      if (p && typeof p === 'object' && !seen.has(p)) {
+        seen.add(p);
+        if (isHistoryLike(p.history))                  return p.history;
+        if (p.value && isHistoryLike(p.value.history)) return p.value.history;
+        if (p.value && isHistoryLike(p.value))         return p.value;
+      }
+      // Hook list (function components)
+      let s = f.memoizedState;
+      let hops = 0;
+      while (s && hops < 200) {
+        hops++;
+        const v = s.memoizedState;
+        if (v && typeof v === 'object' && !seen.has(v)) {
+          seen.add(v);
+          if (isHistoryLike(v.history)) return v.history;
+          if (isHistoryLike(v))         return v;
+        }
+        s = s.next;
+      }
+      f = f.return;
+    }
+    return null;
+  }
+
+  // ── Apertura della subtask nel side-panel del backlog ────────────
+  //
+  //  ⚠️  NON MODIFICARE LA SEQUENZA STEP A → STEP B SENZA AVER LETTO
+  //      QUESTO BLOCCO.  La storia delle modifiche è in fondo.
+  //
+  //  Contesto: i link nativi del backlog
+  //    a[data-is-router-link][data-testid$="card-contents.key"]
+  //  hanno un React onClick che chiama internamente:
+  //    handleNavigation(event, { routerActions: E, href: I, ... })
+  //  dove:
+  //    • `I` è la issue key BOUND a quella card al render
+  //      (es. il primo link del backlog ha I="/browse/BND-477");
+  //    • `E` è `routerActions` di @atlassian/react-resource-router,
+  //      preso da context/sweet-state: NON è in props né nel fiber,
+  //      quindi non possiamo invocarlo direttamente.
+  //
+  //  Per aprire la subtask N nel drawer servono DUE step in sequenza:
+  //
+  //    Step A) Invochiamo proxy.onClick(fakeEvent) con un evento
+  //            sintetico. handleNavigation chiama routerActions.push
+  //            con la `I` della closure → il drawer si MONTA sulla
+  //            issue del proxy (es. BND-477). Da questo istante i
+  //            resource subscribers del drawer sono vivi e ascoltano
+  //            il parametro `selectedIssue` dell'URL.
+  //
+  //    Step B) Chiamiamo history.replace(...?selectedIssue=N) con
+  //            l'history wrapper preso dal fiber tree. Il drawer,
+  //            già montato, vede il cambio di query e ricarica il
+  //            contenuto sulla subtask N. Usiamo replace (non push)
+  //            per non sporcare la cronologia con la chiave
+  //            transitoria del proxy.
+  //
+  //  Senza Step A il drawer non viene mai montato e Step B non basta
+  //  a farlo apparire. Senza Step B il drawer resta sulla key del
+  //  proxy invece della subtask richiesta. Servono ENTRAMBI, in
+  //  quest'ordine.
+  //
+  //  Strategia 1 (fast-path): se la subtask è già una card visibile
+  //  del backlog, props.href e onClick sono già legati alla key
+  //  giusta → basta click() diretto sul suo link nativo.
+  //
+  //  ──────────────────────────────────────────────────────────────
+  //  ANTI-PATTERN (già provati, NON ripetere):
+  //   • Cliccare il NOSTRO <a> sperando nel router delegato di Jira:
+  //     Jira ascolta solo i propri link React, non i nostri.
+  //   • Modificare l'attributo href del proxy prima di .click():
+  //     l'onClick legge `I` dalla closure, non dal DOM → apre sempre
+  //     la key della card "vittima" del proxy.
+  //   • Clonare il proxy e cliccare il clone: il clone non ha fiber
+  //     React → nessun onClick → solo navigazione a pagina piena.
+  //   • history.push("/browse/KEY") o window.history.pushState:
+  //     l'URL cambia ma il drawer non si apre (i resource subscriber
+  //     non vengono notificati).
+  //   • history.refreshRoutes() senza argomenti: crash dell'app
+  //     ("t is not iterable").
+  //  ──────────────────────────────────────────────────────────────
+  function openIssueInSidePanel(issueKey) {
+    dgrp(`%c[Jira STE] 🚪 openIssueInSidePanel(${issueKey})`,
+      'color:#0052CC;font-weight:bold');
+
+    // ── 1) Fast-path: subtask già presente come card del backlog ──
+    try {
+      const ownLink = document.querySelector(
+        `a[data-is-router-link="true"][data-testid$="card-contents.key"][href$="/browse/${issueKey}"]`
+      );
+      if (ownLink) {
+        dlog('strategia 1 — ownLink trovato, click diretto');
+        ownLink.click();
+        dgrpe();
+        return;
+      }
+    } catch (err) { dwarn('strategia 1 errore:', err); }
+
+    // ── 2) Step A (proxy onClick) + Step B (history.replace) ──────
+    try {
+      // Proxy: un qualunque router-link "key" del backlog. Il suo
+      // onClick React è già cablato al router interno di Jira: lo
+      // useremo per "accendere" il drawer.
+      const proxy = document.querySelector(
+        'a[data-is-router-link="true"][data-testid$="card-contents.key"]'
+      ) || document.querySelector(
+        'a[data-is-router-link="true"][href*="/browse/"]'
+      );
+      if (!proxy) { dwarn('strategia 2 — nessun proxy trovato nel backlog'); }
+      else {
+        const props   = getReactProps(proxy);
+        const fiber   = getReactFiber(proxy);
+        const history = fiber ? findRouterFromFiber(fiber) : null;
+        dlog('  proxy props.href (closure):', props && props.href);
+        dlog('  history trovato?', !!history);
+
+        if (props && typeof props.onClick === 'function' && history) {
+          // Esposto per debug manuale da console.
+          window.__jiraSTE_router = history;
+
+          // ─── Step A ────────────────────────────────────────────
+          //   Invoca l'onClick React del proxy → handleNavigation →
+          //   routerActions.push(I) → il drawer si monta sulla key
+          //   bound al proxy (transitorio).
+          const fakeEvent = {
+            type: 'click', button: 0, buttons: 1,
+            ctrlKey: false, metaKey: false, shiftKey: false, altKey: false,
+            target: proxy, currentTarget: proxy,
+            preventDefault:  function () { this.defaultPrevented = true; },
+            stopPropagation: function () { this._propagationStopped = true; },
+            stopImmediatePropagation: function () { this._propagationStopped = true; },
+            isDefaultPrevented:  function () { return !!this.defaultPrevented; },
+            isPropagationStopped:function () { return !!this._propagationStopped; },
+            nativeEvent: { button: 0, defaultPrevented: false },
+            persist: function () {},
+          };
+          dlog('  step A → proxy.onClick(fakeEvent)');
+          props.onClick(fakeEvent);
+          dlog('  URL dopo step A:', window.location.href);
+
+          // ─── Step B ────────────────────────────────────────────
+          //   Scambia selectedIssue con la chiave VERA. Il drawer è
+          //   già montato e ascolta il query param → ricarica sulla
+          //   subtask richiesta.
+          const cur = new URL(window.location.href);
+          cur.searchParams.set('selectedIssue', issueKey);
+          const target = cur.pathname + cur.search + cur.hash;
+          dlog(`  step B → history.replace("${target}")`);
+          history.replace(target);
+          dlog('  URL dopo step B:', window.location.href);
+          dgrpe();
+          return;
+        }
+        dwarn('  proxy senza onClick o history non trovato → fallback');
+      }
+    } catch (err) { dwarn('strategia 2 errore:', err); }
+
+    // ── 3) Fallback finale: navigazione classica ──────────────────
+    //   Si perde il contesto del backlog ma almeno l'utente arriva
+    //   sulla issue. Scatta solo se Jira ha cambiato struttura.
+    console.warn('[Jira STE] strategie SPA fallite → navigazione classica a /browse/' + issueKey);
+    window.location.href = `${BASE_URL}/browse/${issueKey}`;
+    dgrpe();
   }
 
   // ── Pannello completo ────────────────────────────────────────────
@@ -294,6 +540,17 @@
 
     let panel = null;
     let open  = false;
+    let cleanupReposition = null;
+
+    function positionPanel() {
+      if (!panel) return;
+      const r = row.getBoundingClientRect();
+      // Sotto la card, allineato al bordo sinistro, larghezza pari alla card.
+      const top = Math.min(r.bottom + 2, window.innerHeight - 40);
+      panel.style.top    = `${top}px`;
+      panel.style.left   = `${r.left + 24}px`;
+      panel.style.width  = `${Math.max(r.width - 32, 320)}px`;
+    }
 
     function close() {
       if (!open) return;
@@ -302,6 +559,7 @@
       open = false;
       btn.classList.remove('open', 'spin');
       btn.textContent = '▶';
+      if (cleanupReposition) { cleanupReposition(); cleanupReposition = null; }
       if (currentInstance === instanceApi) currentInstance = null;
     }
 
@@ -327,9 +585,27 @@
       btn.classList.add('open');
 
       panel = built;
-      // Append dentro la card: [data-ste-row]{position:relative} è attivo,
-      // quindi il pannello (absolute) si posiziona rispetto alla card.
-      row.appendChild(panel);
+      // Montiamo il pannello in document.body (NON dentro la card del
+      // backlog) per evitare che gli handler in capture-phase della card
+      // intercettino i click sui link dei subtask. Posizione: position:fixed
+      // calcolata sulle coordinate della card.
+      document.body.appendChild(panel);
+      positionPanel();
+
+      // Riposiziona su scroll/resize finché il pannello è aperto.
+      const scroller = document.querySelector(
+        '[data-testid="software-backlog.backlog-content.scrollable"]'
+      );
+      const onMove = () => positionPanel();
+      window.addEventListener('scroll', onMove, true);
+      window.addEventListener('resize', onMove);
+      if (scroller) scroller.addEventListener('scroll', onMove, { passive: true });
+      cleanupReposition = () => {
+        window.removeEventListener('scroll', onMove, true);
+        window.removeEventListener('resize', onMove);
+        if (scroller) scroller.removeEventListener('scroll', onMove);
+      };
+
       open = true;
     });
 
@@ -394,8 +670,14 @@
     'color:#0052CC;font-weight:bold', 'color:inherit'
   );
 
-  // Hook di debug
-  window.__jiraSTE = { scan, findBacklogRows };
+  // Hook di debug (accessibili da console):
+  //   window.__jiraSTE.scan()                  — rescan del backlog
+  //   window.__jiraSTE.findBacklogRows()       — righe candidate
+  //   window.__jiraSTE.openIssueInSidePanel(K) — apri issue K nel drawer
+  //   window.__jiraSTE_router                  — history wrapper di Jira
+  //                                              (popolato dopo il primo
+  //                                              uso del drawer)
+  window.__jiraSTE = { scan, findBacklogRows, openIssueInSidePanel };
 })();
 
 
