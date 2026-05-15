@@ -162,6 +162,69 @@
         color: var(--ds-text-danger, #AE2A19);
         background: var(--ds-background-danger, #FFECEB);
       }
+
+      /* ── Editor inline (stato + assegnatario) ─────────────────── */
+      .jira-ste-row              { position: relative; }
+      .jira-ste-status.editable,
+      .jira-ste-assignee.editable { cursor: pointer; }
+      .jira-ste-status.editable:hover,
+      .jira-ste-assignee.editable:hover {
+        outline: 1px dashed var(--ds-border-selected, #0C66E4);
+        outline-offset: 1px;
+      }
+      .jira-ste-busy { opacity: .6; pointer-events: none; }
+
+      .jira-ste-popover {
+        position: absolute;
+        z-index: 10000;
+        min-width: 220px;
+        max-height: 300px;
+        overflow-y: auto;
+        padding: 4px 0;
+        border: 1px solid var(--ds-border, #C1C7D0);
+        border-radius: 4px;
+        background: var(--ds-surface-overlay, var(--ds-surface-raised, #FFFFFF));
+        color: var(--ds-text, inherit);
+        box-shadow: var(--ds-shadow-overlay,
+          0 8px 24px rgba(9,30,66,.25), 0 0 1px rgba(9,30,66,.31));
+        font-size: 12px;
+      }
+      .jira-ste-popover-input {
+        display: block;
+        width: calc(100% - 16px);
+        margin: 4px 8px 6px;
+        padding: 4px 6px;
+        font-size: 12px;
+        border: 1px solid var(--ds-border, #C1C7D0);
+        border-radius: 3px;
+        background: var(--ds-surface-raised, #FFFFFF);
+        color: var(--ds-text, inherit);
+        box-sizing: border-box;
+      }
+      .jira-ste-popover-item {
+        display: flex; align-items: center; gap: 6px;
+        padding: 6px 10px;
+        cursor: pointer;
+        color: var(--ds-text, inherit);
+      }
+      .jira-ste-popover-item:hover {
+        background: var(--ds-background-neutral-subtle-hovered, rgba(9,30,66,.06));
+      }
+      .jira-ste-popover-item.current {
+        font-weight: 700;
+        background: var(--ds-background-selected, rgba(12,102,228,.08));
+      }
+      .jira-ste-popover-item .jira-ste-avatar { width: 18px; height: 18px; }
+      .jira-ste-popover-empty,
+      .jira-ste-popover-loading {
+        padding: 8px 10px;
+        font-style: italic;
+        color: var(--ds-text-subtlest, #6B6E76);
+      }
+      .jira-ste-popover-err {
+        padding: 6px 10px;
+        color: var(--ds-text-danger, #AE2A19);
+      }
     </style>`);
   }
 
@@ -235,22 +298,93 @@
     return (await r2.json()).issues || [];
   }
 
-  // ── Riga subtask ─────────────────────────────────────────────────
-  function makeRow(issue) {
-    const f = issue.fields || {};
-    const summary  = f.summary || '—';
-    const status   = f.status?.name || '—';
-    const catKey   = f.status?.statusCategory?.key || 'new';
-    const assignee = f.assignee?.displayName || 'Non assegnato';
-    const avatar   = f.assignee?.avatarUrls?.['24x24'];
-    const { bg, fg } = statusStyle(catKey);
+  // ── API helpers: editing inline di status e assegnatario ─────────
+  async function jiraJSON(url, opts = {}) {
+    const r = await fetch(url, {
+      credentials: 'same-origin',
+      headers: {
+        'Accept': 'application/json',
+        'X-Atlassian-Token': 'no-check',
+        ...(opts.body ? { 'Content-Type': 'application/json' } : {}),
+        ...(opts.headers || {}),
+      },
+      ...opts,
+    });
+    if (!r.ok) {
+      const b = await r.json().catch(() => ({}));
+      const msg = b.errorMessages?.[0]
+        || (b.errors && Object.values(b.errors)[0])
+        || `HTTP ${r.status}`;
+      throw new Error(msg);
+    }
+    // PUT/POST 204 → no body
+    if (r.status === 204) return null;
+    return r.json().catch(() => null);
+  }
 
+  // GET transitions disponibili per una issue
+  function fetchTransitions(issueKey) {
+    return jiraJSON(`${BASE_URL}/rest/api/3/issue/${encodeURIComponent(issueKey)}/transitions`);
+  }
+  // POST transition (cambia stato applicando la transition)
+  function doTransition(issueKey, transitionId) {
+    return jiraJSON(`${BASE_URL}/rest/api/3/issue/${encodeURIComponent(issueKey)}/transitions`, {
+      method: 'POST',
+      body: JSON.stringify({ transition: { id: transitionId } }),
+    });
+  }
+  // GET utenti assegnabili (con filtro testuale opzionale)
+  function fetchAssignableUsers(issueKey, query) {
+    const u = new URL(`${BASE_URL}/rest/api/3/user/assignable/search`);
+    u.searchParams.set('issueKey', issueKey);
+    if (query) u.searchParams.set('query', query);
+    u.searchParams.set('maxResults', '10');
+    return jiraJSON(u.toString());
+  }
+  // PUT assignee (accountId=null → unassign)
+  function setAssignee(issueKey, accountId) {
+    return jiraJSON(`${BASE_URL}/rest/api/3/issue/${encodeURIComponent(issueKey)}/assignee`, {
+      method: 'PUT',
+      body: JSON.stringify({ accountId: accountId }),
+    });
+  }
+  // GET singola issue (per rinfrescare status/assignee dopo update)
+  function fetchIssue(issueKey) {
+    return jiraJSON(
+      `${BASE_URL}/rest/api/3/issue/${encodeURIComponent(issueKey)}?fields=summary,status,assignee`
+    );
+  }
+
+  // Chiude tutti i popover di edit aperti nel pannello.
+  function closeAllStePopovers() {
+    document.querySelectorAll('.jira-ste-popover').forEach(n => n.remove());
+  }
+  // Click globale: chiude i popover quando si clicca fuori.
+  if (!window.__jiraSTE_popoverHandler) {
+    document.addEventListener('click', (e) => {
+      if (e.target.closest('.jira-ste-popover')) return;
+      if (e.target.closest('.jira-ste-status.editable')) return;
+      if (e.target.closest('.jira-ste-assignee.editable')) return;
+      closeAllStePopovers();
+    }, true);
+    window.__jiraSTE_popoverHandler = true;
+  }
+
+  // ── Riga subtask ─────────────────────────────────────────────────
+  //  Costruisce la <div> della riga e attacca:
+  //   • click sulla key  → apertura nel drawer (Step A + Step B)
+  //   • click sullo status   → popover con le transitions disponibili
+  //   • click sull'assegnatario → popover con search utenti assegnabili
+  //  Status e assignee vengono riscritti in place quando l'utente
+  //  conferma una modifica (renderStatus / renderAssignee).
+  function makeRow(issue) {
     const row = document.createElement('div');
     row.className = 'jira-ste-row';
-    // NB: replichiamo gli attributi del link "key" nativo del backlog
-    //     (data-is-router-link + target="_self" + href relativo) così che
-    //     il router SPA di Jira intercetti il click e apra il side-panel,
-    //     invece di aprire una nuova tab o navigare a pagina piena.
+    const summary  = issue.fields?.summary || '—';
+
+    // Markup base: la key e il titolo non sono editabili; status e
+    // assignee vengono popolati dalle funzioni render* qui sotto, così
+    // riusiamo lo stesso codice dopo un update.
     row.innerHTML = `
       <a class="jira-ste-key"
          href="/browse/${esc(issue.key)}"
@@ -259,25 +393,36 @@
          data-ste-issue="${esc(issue.key)}"
          rel="noopener">${esc(issue.key)}</a>
       <span class="jira-ste-summary" title="${esc(summary)}">${esc(summary)}</span>
-      <span class="jira-ste-status" style="background:${bg};color:${fg}">${esc(status)}</span>
-      <span class="jira-ste-assignee">
+      <span class="jira-ste-status editable" title="Click per cambiare stato"></span>
+      <span class="jira-ste-assignee editable" title="Click per cambiare assegnatario"></span>`;
+
+    const statusEl   = row.querySelector('.jira-ste-status');
+    const assigneeEl = row.querySelector('.jira-ste-assignee');
+
+    function renderStatus(statusField) {
+      const name   = statusField?.name || '—';
+      const catKey = statusField?.statusCategory?.key || 'new';
+      const { bg, fg } = statusStyle(catKey);
+      statusEl.textContent = name;
+      statusEl.style.background = bg;
+      statusEl.style.color = fg;
+    }
+    function renderAssignee(assigneeField) {
+      const name   = assigneeField?.displayName || 'Non assegnato';
+      const avatar = assigneeField?.avatarUrls?.['24x24'];
+      assigneeEl.innerHTML = `
         ${avatar
           ? `<img class="jira-ste-avatar" src="${avatar}" alt="">`
           : `<span class="jira-ste-avatar"></span>`}
-        <span>${esc(assignee)}</span>
-      </span>`;
+        <span>${esc(name)}</span>`;
+    }
+    renderStatus(issue.fields?.status);
+    renderAssignee(issue.fields?.assignee);
 
+    // ── Click handler sulla key: apre la subtask nel drawer ────────
     const link = row.querySelector('.jira-ste-key');
-    // Click handler: replica il comportamento delle card native del
-    // backlog (apertura nel drawer laterale invece che navigazione
-    // a pagina piena). I click con modificatori (Ctrl/Cmd/Shift/Alt/
-    // middle-click) restano nativi → aprono in nuova tab/finestra
-    // grazie all'attributo href.
     link.addEventListener('click', (e) => {
       if (e.ctrlKey || e.metaKey || e.shiftKey || e.altKey || e.button !== 0) return;
-      // Blocca SOLO la navigazione di default (no stopPropagation:
-      // il diag listener globale, se attivo, deve comunque vedere il
-      // click per fini di debug).
       e.preventDefault();
       dgrp(`%c[Jira STE] 🖱️ click su subtask ${issue.key}`,
         'color:#0052CC;font-weight:bold');
@@ -285,7 +430,160 @@
       dgrpe();
       openIssueInSidePanel(issue.key);
     });
+
+    // ── Click handler sullo status: editor transitions ─────────────
+    statusEl.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      openStatusEditor(issue, statusEl, renderStatus);
+    });
+
+    // ── Click handler sull'assegnatario: editor utenti ─────────────
+    assigneeEl.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      openAssigneeEditor(issue, assigneeEl, renderAssignee);
+    });
+
     return row;
+  }
+
+  // ── Editor: cambia stato applicando una transition ───────────────
+  async function openStatusEditor(issue, anchorEl, renderStatus) {
+    closeAllStePopovers();
+    const popover = buildPopover(anchorEl);
+    popover.innerHTML = '<div class="jira-ste-popover-loading">Carico transitions…</div>';
+    let transitions;
+    try {
+      const data = await fetchTransitions(issue.key);
+      transitions = data.transitions || [];
+    } catch (err) {
+      popover.innerHTML = `<div class="jira-ste-popover-err">⚠ ${esc(err.message)}</div>`;
+      return;
+    }
+    if (transitions.length === 0) {
+      popover.innerHTML = '<div class="jira-ste-popover-empty">Nessuna transition disponibile</div>';
+      return;
+    }
+    const currentName = issue.fields?.status?.name;
+    popover.innerHTML = transitions.map(t => {
+      const toName = t.to?.name || t.name;
+      const isCurrent = toName === currentName;
+      return `<div class="jira-ste-popover-item${isCurrent ? ' current' : ''}"
+                   data-transition-id="${esc(t.id)}">${esc(toName)}</div>`;
+    }).join('');
+    popover.querySelectorAll('.jira-ste-popover-item').forEach(it => {
+      it.addEventListener('click', async (ev) => {
+        ev.stopPropagation();
+        const tid = it.dataset.transitionId;
+        anchorEl.classList.add('jira-ste-busy');
+        closeAllStePopovers();
+        try {
+          await doTransition(issue.key, tid);
+          // refetch per avere il nuovo statusCategory (e quindi il colore corretto)
+          const updated = await fetchIssue(issue.key);
+          issue.fields.status = updated.fields.status;
+          renderStatus(issue.fields.status);
+        } catch (err) {
+          console.error('[Jira STE] errore transition:', err);
+          alert(`Errore cambio stato: ${err.message}`);
+        } finally {
+          anchorEl.classList.remove('jira-ste-busy');
+        }
+      });
+    });
+  }
+
+  // ── Editor: cambia assegnatario via search ───────────────────────
+  async function openAssigneeEditor(issue, anchorEl, renderAssignee) {
+    closeAllStePopovers();
+    const popover = buildPopover(anchorEl);
+    popover.innerHTML = `
+      <input class="jira-ste-popover-input" type="text" placeholder="Cerca utente…" />
+      <div class="jira-ste-popover-list"><div class="jira-ste-popover-loading">Carico…</div></div>`;
+    const input = popover.querySelector('.jira-ste-popover-input');
+    const list  = popover.querySelector('.jira-ste-popover-list');
+    input.focus();
+
+    async function loadUsers(query) {
+      list.innerHTML = '<div class="jira-ste-popover-loading">Carico…</div>';
+      let users;
+      try {
+        users = await fetchAssignableUsers(issue.key, query);
+      } catch (err) {
+        list.innerHTML = `<div class="jira-ste-popover-err">⚠ ${esc(err.message)}</div>`;
+        return;
+      }
+      const currentId = issue.fields?.assignee?.accountId || null;
+      // Riga "Non assegnato" sempre in cima
+      const unassignedHtml = `
+        <div class="jira-ste-popover-item${currentId == null ? ' current' : ''}" data-account-id="">
+          <span class="jira-ste-avatar"></span>
+          <span><em>Non assegnato</em></span>
+        </div>`;
+      const usersHtml = (users || []).map(u => {
+        const av = u.avatarUrls?.['24x24'];
+        const isCurrent = u.accountId === currentId;
+        return `<div class="jira-ste-popover-item${isCurrent ? ' current' : ''}"
+                     data-account-id="${esc(u.accountId)}"
+                     data-display-name="${esc(u.displayName || '')}"
+                     data-avatar="${esc(av || '')}">
+                  ${av
+                    ? `<img class="jira-ste-avatar" src="${av}" alt="">`
+                    : `<span class="jira-ste-avatar"></span>`}
+                  <span>${esc(u.displayName || u.emailAddress || u.accountId)}</span>
+                </div>`;
+      }).join('');
+      list.innerHTML = unassignedHtml + usersHtml;
+      list.querySelectorAll('.jira-ste-popover-item').forEach(it => {
+        it.addEventListener('click', async (ev) => {
+          ev.stopPropagation();
+          const accountId   = it.dataset.accountId || null;
+          const displayName = it.dataset.displayName;
+          const avatar      = it.dataset.avatar;
+          anchorEl.classList.add('jira-ste-busy');
+          closeAllStePopovers();
+          try {
+            await setAssignee(issue.key, accountId || null);
+            // Aggiorna lo stato locale e la UI senza dover rifetchare.
+            issue.fields.assignee = accountId
+              ? { accountId, displayName,
+                  avatarUrls: avatar ? { '24x24': avatar } : undefined }
+              : null;
+            renderAssignee(issue.fields.assignee);
+          } catch (err) {
+            console.error('[Jira STE] errore set assignee:', err);
+            alert(`Errore cambio assegnatario: ${err.message}`);
+          } finally {
+            anchorEl.classList.remove('jira-ste-busy');
+          }
+        });
+      });
+    }
+
+    // Debounce ricerca a 250ms
+    let t = null;
+    input.addEventListener('input', () => {
+      clearTimeout(t);
+      t = setTimeout(() => loadUsers(input.value.trim()), 250);
+    });
+    loadUsers('');
+  }
+
+  // Crea un popover ancorato sotto-sinistra del riferimento dato e lo
+  // appende al body (position: fixed, calcolato sulle coordinate del
+  // BoundingClientRect dell'elemento di ancoraggio).
+  function buildPopover(anchorEl) {
+    const pop = document.createElement('div');
+    pop.className = 'jira-ste-popover';
+    document.body.appendChild(pop);
+    const r = anchorEl.getBoundingClientRect();
+    // Usiamo position:fixed sovrascrivendo l'absolute del CSS, così le
+    // coordinate sono in viewport e non si rompono con scroll del pannello.
+    pop.style.position = 'fixed';
+    pop.style.top  = `${Math.min(r.bottom + 2, window.innerHeight - 40)}px`;
+    pop.style.left = `${r.left}px`;
+    return pop;
   }
 
   // ── Helper: estrai React props/fiber da un nodo DOM ──────────────
