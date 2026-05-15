@@ -830,6 +830,11 @@
     row.dataset.steDone = '1';
     row.setAttribute('data-ste-row', '1');
 
+    // Riferimento mutabile: il backlog è virtualizzato, la card può
+    // essere rimossa e ricreata. positionPanel() farà re-lookup per
+    // questa issueKey e aggiornerà currentRow al nuovo nodo DOM.
+    let currentRow = row;
+
     const btn = document.createElement('button');
     btn.className   = 'jira-ste-btn';
     btn.title       = `Espandi child issues di ${issueKey}`;
@@ -839,10 +844,57 @@
     let panel = null;
     let open  = false;
     let cleanupReposition = null;
+    let resizeObs = null;
 
     function positionPanel() {
       if (!panel) return;
-      const r = row.getBoundingClientRect();
+      // Re-lookup della card se è stata rimossa dal DOM dalla
+      // virtualizzazione del backlog (quando torna in viewport è un
+      // nuovo nodo DOM con stessa issueKey nel data-testid).
+      if (!currentRow.isConnected) {
+        const fresh = document.querySelector(
+          `[data-testid="software-backlog.card-list.card.content-container.${issueKey}"]`
+        );
+        if (fresh) {
+          currentRow = fresh;
+          currentRow.setAttribute('data-ste-row', '1');
+          currentRow.dataset.steDone = '1';
+          if (resizeObs) {
+            try { resizeObs.disconnect(); } catch (_) {}
+            resizeObs = new ResizeObserver(positionPanel);
+            resizeObs.observe(currentRow);
+            resizeObs.observe(document.body);
+          }
+        }
+      }
+
+      // Lookup dinamico dello scroller (può non esistere all'apertura
+      // del pannello, ma materializzarsi dopo).
+      const sc = document.querySelector(
+        '[data-testid="software-backlog.backlog-content.scrollable"]'
+      );
+      const r = currentRow.getBoundingClientRect();
+
+      // La card può essere rimossa dal DOM dalla virtualizzazione del
+      // backlog quando esce dal viewport: in quel caso il rect è tutto
+      // a 0. Oppure può essere fisicamente fuori dal viewport del
+      // backlog (sotto l'header o sotto il footer dello scroller).
+      // In entrambi i casi nascondiamo il pannello senza chiuderlo:
+      // tornerà visibile quando la card rientra.
+      const disconnected = !currentRow.isConnected || (r.width === 0 && r.height === 0);
+      let outsideScroller = false;
+      if (sc) {
+        const s = sc.getBoundingClientRect();
+        // Se la card è completamente sopra o sotto la viewport dello
+        // scroller (con piccola tolleranza) → nascondi.
+        outsideScroller = r.bottom < s.top + 2 || r.top > s.bottom - 2;
+      }
+      if (disconnected || outsideScroller) {
+        panel.style.visibility = 'hidden';
+        return;
+      }
+      panel.style.visibility = 'visible';
+
       // Sotto la card, allineato al bordo sinistro, larghezza pari alla card.
       const top = Math.min(r.bottom + 2, window.innerHeight - 40);
       panel.style.top    = `${top}px`;
@@ -903,18 +955,40 @@
       window.addEventListener('scroll', onMove, true);
       window.addEventListener('resize', onMove);
       if (scroller) scroller.addEventListener('scroll', onMove, { passive: true });
-      let resizeObs = null;
       if (typeof ResizeObserver !== 'undefined') {
         resizeObs = new ResizeObserver(onMove);
-        resizeObs.observe(row);
+        resizeObs.observe(currentRow);
         // Anche il body: il drawer laterale modifica il layout globale.
         resizeObs.observe(document.body);
       }
+
+      // Forward dello scroll wheel allo scroller del backlog quando il
+      // mouse è sopra il pannello. Il pannello mantiene il proprio
+      // scroll interno fino al limite (top/bottom o overflow assente);
+      // oltre quel limite il delta viene inoltrato al backlog.
+      const onWheel = (e) => {
+        if (!scroller) return;
+        const dy = e.deltaY;
+        if (dy === 0) return;
+        const canScroll = panel.scrollHeight > panel.clientHeight;
+        const atTop     = panel.scrollTop <= 0;
+        const atBottom  = panel.scrollTop + panel.clientHeight
+                          >= panel.scrollHeight - 1;
+        const panelHandles =
+          canScroll && ((dy > 0 && !atBottom) || (dy < 0 && !atTop));
+        if (!panelHandles) {
+          e.preventDefault();
+          scroller.scrollBy({ top: dy, left: e.deltaX, behavior: 'auto' });
+        }
+      };
+      panel.addEventListener('wheel', onWheel, { passive: false });
+
       cleanupReposition = () => {
         window.removeEventListener('scroll', onMove, true);
         window.removeEventListener('resize', onMove);
         if (scroller) scroller.removeEventListener('scroll', onMove);
         if (resizeObs) resizeObs.disconnect();
+        panel.removeEventListener('wheel', onWheel);
       };
 
       open = true;
@@ -955,21 +1029,23 @@
     }
   }
 
-  // ── MutationObserver (debounce 300ms) ───────────────────────────
+  // ── MutationObserver (debounce 80ms) ────────────────────────────
+  //  Debounce basso così le frecce vengono riattaccate rapidamente
+  //  quando il backlog virtualizzato ricrea le card durante lo scroll.
   const obs = new MutationObserver(() => {
     clearTimeout(obs._t);
-    obs._t = setTimeout(scan, 300);
+    obs._t = setTimeout(scan, 80);
   });
   obs.observe(document.body, { childList: true, subtree: true });
 
-  // Trigger anche su scroll del contenitore virtualizzato
+  // Trigger anche su scroll del contenitore virtualizzato (più rapido)
   const scroller = document.querySelector(
     '[data-testid="software-backlog.backlog-content.scrollable"]'
   );
   if (scroller) {
     scroller.addEventListener('scroll', () => {
       clearTimeout(obs._t);
-      obs._t = setTimeout(scan, 200);
+      obs._t = setTimeout(scan, 50);
     }, { passive: true });
   }
 
