@@ -10,7 +10,7 @@
 		}
 		let familyId = onboardingCitizen.familyId;
 		if(!familyId){
-			print("✗ familyId not valid.");
+			print("✗ familyId not valid, using userId as familyId.");
 			familyId = userId;
 		}
 
@@ -18,7 +18,7 @@
 
 		deleteAll("idpay-beneficiari", "hpan_initiatives_lookup", { userId: userId }, dry);
 		deleteAll("idpay-beneficiari", "initiative_counters", { userId: userId, initiativeId: initiativeId }, dry);
-		decrementInitiativeCounter(initiativeId, dry)
+		decrementInitiativeCounter(initiativeId, dry);
 		deleteAll("idpay-beneficiari", "onboarding_citizen", { userId: userId }, dry);
 		// TOCHECK: I REMOVE THE WHOLE FAMILY !!!
 		deleteAll("idpay-beneficiari", "onboarding_families", { memberIds: userId }, dry);
@@ -48,7 +48,7 @@
 			let update = {
 				$inc: { onboarded: -1 }
 			};
-			let query = { _id: ObjectId( initiativeId ) }
+			let query = { _id: ObjectId( initiativeId ) };
 			let updateResult = db.getSiblingDB("idpay-beneficiari")["initiative_counters"].updateMany(query, update);
 			print("initiative_counters - Decremented onboarded counter by 1");
 		}
