@@ -47,7 +47,7 @@ Output atteso:
 
 ## Configurazione
 
-Nel file `visura_pdnd.py` valorizzare:
+Nel file `visura-pdnd.py` valorizzare:
 
 ```python
 PDND_AUTH_URL = "https://..."
@@ -76,7 +76,7 @@ codice_fiscale = "<CODICE_FISCALE>"
 Eseguire:
 
 ```bash
-python visura_pdnd.py
+python visura-pdnd.py
 ```
 
 ---
