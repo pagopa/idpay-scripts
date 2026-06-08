@@ -17,7 +17,6 @@
 
         let userInitiativeQuery = { userId: userId, initiativeId: initiativeId };
 
-		deleteAll("idpay-beneficiari", "hpan_initiatives_lookup", { userId: userId }, dry); // TOFIX query
 		deleteAll("idpay-beneficiari", "initiative_counters", userInitiativeQuery, dry);
 		decrementInitiativeCounter(initiativeId, dry);
 		deleteAll("idpay-beneficiari", "onboarding_citizen", userInitiativeQuery, dry);
