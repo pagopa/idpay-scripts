@@ -1,6 +1,7 @@
-	function userDeonboarding(userId, dry = false){
+	function userDeonboarding(initiativeId, userId, dry = false){
 		print("userDeonboarding userId: " + userId);
-		let onboardingCitizen = db.getSiblingDB("idpay-beneficiari")["onboarding_citizen"].findOne({ userId: userId });
+		let query = { userId: userId, initiativeId: initiativeId };
+		let onboardingCitizen = db.getSiblingDB("idpay-beneficiari")["onboarding_citizen"].findOne(query);
 		if (onboardingCitizen) {
 			print("✓ onboarding_citizen found:");
 			printjson(onboardingCitizen);
@@ -14,21 +15,20 @@
 			familyId = userId;
 		}
 
-		let initiativeId = "68dd003ccce8c534d1da22bc";
+        let userInitiativeQuery = { userId: userId, initiativeId: initiativeId };
 
-		deleteAll("idpay-beneficiari", "hpan_initiatives_lookup", { userId: userId }, dry);
-		deleteAll("idpay-beneficiari", "initiative_counters", { userId: userId, initiativeId: initiativeId }, dry);
+		deleteAll("idpay-beneficiari", "hpan_initiatives_lookup", { userId: userId }, dry); // TOFIX query
+		deleteAll("idpay-beneficiari", "initiative_counters", userInitiativeQuery, dry);
 		decrementInitiativeCounter(initiativeId, dry);
-		deleteAll("idpay-beneficiari", "onboarding_citizen", { userId: userId }, dry);
-		// TOCHECK: I REMOVE THE WHOLE FAMILY !!!
+		deleteAll("idpay-beneficiari", "onboarding_citizen", userInitiativeQuery, dry);
 		deleteAll("idpay-beneficiari", "onboarding_families", { memberIds: userId }, dry);
-		deleteAll("idpay-beneficiari", "payment_instrument", { userId: userId }, dry);
-		deleteAll("idpay-beneficiari", "timeline", { userId: userId }, dry);
-		deleteAll("idpay-pagamenti", "transaction", { userId: userId }, dry);
-		deleteAll("idpay-beneficiari", "transaction_in_progress", { userId: userId }, dry);
-		deleteAll("idpay-pagamenti", "user_initiative_counters", { entityId: userId }, dry);
-		deleteAll("idpay-pagamenti", "user_initiative_counters", { entityId: familyId }, dry);
-		deleteAll("idpay-beneficiari", "wallet", { userId: userId }, dry);
+		deleteAll("idpay-beneficiari", "payment_instrument", userInitiativeQuery, dry);
+		deleteAll("idpay-beneficiari", "timeline", userInitiativeQuery, dry);
+		deleteAll("idpay-pagamenti", "transaction", { userId: userId, initiatives: initiativeId }, dry);
+		deleteAll("idpay-beneficiari", "transaction_in_progress", { userId: userId, initiatives: initiativeId }, dry);
+		deleteAll("idpay-pagamenti", "user_initiative_counters", { entityId: userId, initiativeId: initiativeId }, dry);
+		deleteAll("idpay-pagamenti", "user_initiative_counters", { entityId: familyId, initiativeId: initiativeId }, dry);
+		deleteAll("idpay-beneficiari", "wallet", userInitiativeQuery, dry);
 	}
 
 	function deleteAll(databaseName, collectionName, query, dry){
@@ -54,7 +54,7 @@
 		}
 	}
 
-	function cfDeboarding(userFiscalCode, dry = false){
+	function cfDeboarding(initiativeId, userFiscalCode, dry = false){
 		let clearDataVault = db.getSiblingDB("idpay-beneficiari")["data_vault"].findOne({ data: userFiscalCode });
 		if (clearDataVault) {
 			print("✓ data_vault found:");
@@ -64,11 +64,13 @@
 			return 1;
 		}
 		let userId = clearDataVault._id.toString();
-		userDeonboarding(userId, dry);
+		userDeonboarding(initiativeId, userId, dry);
 	}
 
-	function bulkuserDeonboarding(dry = false) {
-		let allUsers = db.getSiblingDB("idpay-beneficiari")["onboarding_citizen"].find({}, { userId: 1, _id: 0 });
+	function bulkuserDeonboarding(initiativeId, dry = false) {
+	    let query = { initiativeId: initiativeId };
+	    let projection = { userId: 1, _id: 0 };
+		let allUsers = db.getSiblingDB("idpay-beneficiari")["onboarding_citizen"].find(query, projection);
 		let userIds = [];
 
 		allUsers.forEach(function(doc) {
@@ -85,16 +87,18 @@
 		print("⚠️  WARNING: This will delete " + userIds.length + " users and all their data!");
 
 		userIds.forEach(function(userId, index) {
-			userDeonboarding(userId, dry);
+			userDeonboarding(initiativeId, userId, dry);
 		});
 	}
 
 	// version : 2026-05-26 v1
+    let initiativeId = "68dd003ccce8c534d1da22bc"; // bonus elettrodomestici 2025
+    let initiativeId = "69e0fa95e21efa516c7b8dec"; // bonus decoder 2026
 
-	//bulkuserDeonboarding(true);
-	//userDeonboarding("890eYgVnEHteaywo0yfq9lzuv", false);
-	//cfDeboarding("LLLLNZ80A01F205O", false); // l.lollo    dev:ee46mQR0pYxRmHrkJOhETC2wd uat:ee46bbyKPElSp98PtEBZ24EnQ
-	//cfDeboarding("DRGVNI78L14C573A", false); // i.drago    dev:7bb1kI97lLK39thlEvw5WaVyU uat:
-	//cfDeboarding("CRCCRL77A19G273Q", false); // c.cracco   dev:2d445aDsx6ebPKJLuK4FV9RxA uat:
-	//cfDeboarding("CLVTLI80A01F839V", false); // i.calvino  uat:890eYgVnEHteaywo0yfq9lzuv uat:
-	//cfDeboarding("CRUMRA76S58A944V", false); // m.curie    dev:d7f7P0sCxD4cptx1BaQWlmy1l uat:
+	//bulkuserDeonboarding(initiativeId, true);
+	//userDeonboarding(initiativeId, "890eYgVnEHteaywo0yfq9lzuv", false);
+	//cfDeboarding(initiativeId, "LLLLNZ80A01F205O", false); // l.lollo    dev:ee46mQR0pYxRmHrkJOhETC2wd uat:ee46bbyKPElSp98PtEBZ24EnQ
+	//cfDeboarding(initiativeId, "DRGVNI78L14C573A", false); // i.drago    dev:7bb1kI97lLK39thlEvw5WaVyU uat:
+	//cfDeboarding(initiativeId, "CRCCRL77A19G273Q", false); // c.cracco   dev:2d445aDsx6ebPKJLuK4FV9RxA uat:
+	//cfDeboarding(initiativeId, "CLVTLI80A01F839V", false); // i.calvino  uat:890eYgVnEHteaywo0yfq9lzuv uat:
+	//cfDeboarding(initiativeId, "CRUMRA76S58A944V", false); // m.curie    dev:d7f7P0sCxD4cptx1BaQWlmy1l uat:
