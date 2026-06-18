@@ -30,7 +30,7 @@ docs.forEach(doc => {
   }
 
   if (MODE === "execute") {
-    db.point_of_sales.updateOne(
+    col.updateOne(
       { _id: doc._id },
       { $set: { address: streetName, streetNumber: streetNumber } }
     );
