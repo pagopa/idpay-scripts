@@ -25,7 +25,7 @@ def main():
         FISCAL_CODE_PREFIX,
     )
     logger.info("Connecting to PostgreSQL")
-    pg_conn = psycopg2.connect("postgresql://username:psw@cstar-u-itn-idpay-pgflex.postgres.database.azure.com:5432/idpay-database")
+    pg_conn = psycopg2.connect("postgresql://username:psw@host:5432/idpay-database")
     logger.info("Connected to PostgreSQL; connecting to MongoDB")
     mongo_client = MongoClient("connection-string")
     mongo_db = mongo_client["idpay-beneficiari"]
