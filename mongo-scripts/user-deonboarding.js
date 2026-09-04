@@ -23,11 +23,37 @@
 		deleteAll("idpay-beneficiari", "onboarding_families", { memberIds: userId }, dry);
 		deleteAll("idpay-beneficiari", "payment_instrument", userInitiativeQuery, dry);
 		deleteAll("idpay-beneficiari", "timeline", userInitiativeQuery, dry);
-		deleteAll("idpay-pagamenti", "transaction", { userId: userId, initiatives: initiativeId }, dry);
-		deleteAll("idpay-beneficiari", "transaction_in_progress", { userId: userId, initiatives: initiativeId }, dry);
 		deleteAll("idpay-pagamenti", "user_initiative_counters", { entityId: userId, initiativeId: initiativeId }, dry);
 		deleteAll("idpay-pagamenti", "user_initiative_counters", { entityId: familyId, initiativeId: initiativeId }, dry);
 		deleteAll("idpay-beneficiari", "wallet", userInitiativeQuery, dry);
+
+		printPostgresTransactionDeleteWarning(userId, initiativeId);
+	}
+
+	function printPostgresTransactionDeleteWarning(userId, initiativeId){
+		print("");
+		print("⚠️  ATTENZIONE: ricordati di cancellare i dati su PostgreSQL, incolla lo scriot, evidenzialo e premi CTRL+ENTER per eseguirlo:");
+		print("-- userId: " + userId + " | initiativeId: " + initiativeId);
+		print("");
+		print("");
+		print("BEGIN;");
+		print("");
+		print("CREATE TEMP TABLE tmp_deleted_tx_ids ON COMMIT DROP AS");
+		print("SELECT id");
+		print("FROM \"idpay-pagamenti\".transaction");
+		print("WHERE \"userId\" = '" + userId + "'");
+		print("  AND \"initiativeId\" = '" + initiativeId + "';");
+		print("");
+		print("DELETE FROM \"idpay-pagamenti\".transaction");
+		print("WHERE id IN (SELECT id FROM tmp_deleted_tx_ids);");
+		print("");
+		print("DELETE FROM \"idpay-pagamenti\".transaction_outbox");
+		print("WHERE transaction_id IN (SELECT id FROM tmp_deleted_tx_ids);");
+		print("");
+		print("DELETE FROM \"idpay-rimborsi\".reward_transactions");
+		print("WHERE transaction_id IN (SELECT id FROM tmp_deleted_tx_ids);");
+		print("");
+		print("COMMIT;");
 	}
 
 	function deleteAll(databaseName, collectionName, query, dry){
@@ -91,13 +117,13 @@
 	}
 
 	// version : 2026-06-08 v1
-    let initiativeId = "68dd003ccce8c534d1da22bc"; // bonus elettrodomestici 2025
-    // let initiativeId = "69e0fa95e21efa516c7b8dec"; // bonus decoder 2026
+    //let initiativeId = "68dd003ccce8c534d1da22bc"; // bonus elettrodomestici 2025
+    let initiativeId = "69e0fa95e21efa516c7b8dec"; // bonus decoder 2026
 
 	//bulkuserDeonboarding(initiativeId, true);
 	//userDeonboarding(initiativeId, "890eYgVnEHteaywo0yfq9lzuv", false);
 	//cfDeboarding(initiativeId, "LLLLNZ80A01F205O", false); // l.lollo    dev:ee46mQR0pYxRmHrkJOhETC2wd uat:ee46bbyKPElSp98PtEBZ24EnQ
-	//cfDeboarding(initiativeId, "DRGVNI78L14C573A", false); // i.drago    dev:7bb1kI97lLK39thlEvw5WaVyU uat:
-	cfDeboarding(initiativeId, "CRCCRL77A19G273Q", false); // c.cracco   dev:2d445aDsx6ebPKJLuK4FV9RxA uat:
+	//cfDeboarding(initiativeId, "DRGVNI78L14C573A", true); // i.drago    dev:7bb1kI97lLK39thlEvw5WaVyU uat:
+	//cfDeboarding(initiativeId, "CRCCRL77A19G273Q", true); // c.cracco   dev:2d445aDsx6ebPKJLuK4FV9RxA uat:
 	//cfDeboarding(initiativeId, "CLVTLI80A01F839V", false); // i.calvino  uat:890eYgVnEHteaywo0yfq9lzuv uat:
-	//cfDeboarding(initiativeId, "CRUMRA76S58A944V", false); // m.curie    dev:d7f7P0sCxD4cptx1BaQWlmy1l uat:
+	cfDeboarding(initiativeId, "CRUMRA76S58A944V", false); // m.curie    dev:d7f7P0sCxD4cptx1BaQWlmy1l uat:
