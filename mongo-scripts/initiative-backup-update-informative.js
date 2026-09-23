@@ -7,7 +7,7 @@ use("idpay-iniziative");
  * ─────────────────────────────────────────────────────────────────────────────
  * 2. SEZIONE BACKUP
  * ─────────────────────────────────────────────────────────────────────────────
- * Questa sezione crea una collection di backup.
+ * Questa sezione crea una collection di backup per initiative.
  */
 
 db.initiative.aggregate([
@@ -23,7 +23,7 @@ db.initiative.aggregate([
 
 db.initiative.updateOne(
   {
-    "_id": ObjectId("69e0fa95e21efa516c7b8dec"),
+    "_id": ObjectId("INITIATIVE_ID"),
     "beneficiaryRule.selfDeclarationCriteria": {
       $not: {
         $elemMatch: {
@@ -59,7 +59,7 @@ db.initiative.updateOne(
 
 db.initiative.updateOne(
   {
-    "_id": ObjectId("69e0fa95e21efa516c7b8dec"),
+    "_id": ObjectId("INITIATIVE_ID"),
     "beneficiaryRule.selfDeclarationCriteria": {
       $not: {
         $elemMatch: {
