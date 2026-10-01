@@ -27,6 +27,10 @@
   const DEBUG = false;
   const dlog  = (...a) => { if (DEBUG) console.log('[Jira BBA]', ...a); };
   const dwarn = (...a) => { if (DEBUG) console.warn('[Jira BBA]', ...a); };
+  // Log dei tempi SEMPRE attivo: utile per capire quali chiamate sono lente.
+  const now  = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
+  const ms   = t => `${Math.round(now() - t)}ms`;
+  const tlog = (...a) => console.log('%c[Jira BBA ⏱]', 'color:#6E5DC6;font-weight:700', ...a);
 
   // Soglia WIP: oltre questo numero di issue "In corso" l'assegnatario
   // viene segnalato come potenzialmente sovraccarico.
@@ -262,6 +266,8 @@
   }
 
   async function jiraJSON(url, opts = {}) {
+    const t0 = now();
+    const label = (opts.method || 'GET') + ' ' + url.replace(BASE_URL, '');
     const r = await fetch(url, {
       credentials: 'same-origin',
       headers: {
@@ -273,12 +279,14 @@
       ...opts,
     });
     if (!r.ok) {
+      tlog(`✗ ${ms(t0)} · ${label} · HTTP ${r.status}`);
       const b = await r.json().catch(() => ({}));
       const msg = b.errorMessages?.[0]
         || (b.errors && Object.values(b.errors)[0])
         || `HTTP ${r.status}`;
       throw new Error(msg);
     }
+    tlog(`${ms(t0)} · ${label}`);
     if (r.status === 204) return null;
     return r.json().catch(() => null);
   }
@@ -380,8 +388,12 @@
   // Tutte le issue della board (task + subtask) con paginazione,
   // escludendo gli sprint chiusi via JQL (con fallback se la board non
   // supporta le funzioni sprint, es. Kanban).
+  //  Ottimizzazioni:
+  //   - la prima pagina fa anche da "probe" JQL: non viene riscaricata;
+  //   - note `total` e la dimensione pagina, le pagine successive sono
+  //     scaricate IN PARALLELO invece che in sequenza.
   async function fetchBoardIssues(boardId) {
-    async function page(startAt, useJql) {
+    function page(startAt, useJql) {
       const u = new URL(`${BASE_URL}/rest/agile/1.0/board/${boardId}/issue`);
       u.searchParams.set('fields', issueFields().join(','));
       u.searchParams.set('maxResults', '100');
@@ -390,59 +402,122 @@
       return jiraJSON(u.toString());
     }
     let useJql = true;
-    try { await page(0, true); }
-    catch (e) { dwarn('JQL sprint non supportata sulla board, fallback senza filtro', e); useJql = false; }
+    let first;
+    try {
+      first = await page(0, true);
+    } catch (e) {
+      dwarn('JQL sprint non supportata sulla board, fallback senza filtro', e);
+      useJql = false;
+      first = await page(0, false);
+    }
+    const out = (first.issues || []).slice();
+    const total = typeof first.total === 'number' ? first.total : null;
+    const step = (first.maxResults > 0 ? first.maxResults : out.length) || 100;
 
-    const out = [];
-    let startAt = 0;
-    for (let guard = 0; guard < 200; guard++) {
-      const data = await page(startAt, useJql);
-      const issues = data.issues || [];
-      out.push(...issues);
-      const total = typeof data.total === 'number' ? data.total : out.length;
-      startAt += issues.length;
-      if (issues.length === 0 || startAt >= total) break;
+    if (total != null && out.length > 0) {
+      // Sappiamo quante issue mancano: scarichiamo le pagine in parallelo.
+      const tasks = [];
+      for (let startAt = step; startAt < total; startAt += step) tasks.push(page(startAt, useJql));
+      if (tasks.length) {
+        const tP = now();
+        const results = await Promise.all(tasks);
+        tlog(`board: ${tasks.length} pagine extra in parallelo: ${ms(tP)}`);
+        for (const d of results) out.push(...(d.issues || []));
+      }
+    } else {
+      // Totale ignoto: fallback sequenziale.
+      let startAt = out.length;
+      for (let guard = 0; guard < 200 && out.length > 0; guard++) {
+        const data = await page(startAt, useJql);
+        const issues = data.issues || [];
+        if (!issues.length) break;
+        out.push(...issues);
+        startAt += issues.length;
+        if (issues.length < step) break;
+      }
     }
     return out;
   }
 
   // Fallback: tutte le issue di un progetto via JQL (sprint passati esclusi).
+  //  Due endpoint possibili:
+  //   - "enhanced" /search/jql: pagina per nextPageToken (sequenziale, niente total);
+  //   - legacy /search: pagina per startAt/total → pagine in parallelo.
   async function fetchProjectIssues(projectKey) {
     const jql = `project = "${projectKey}" AND ${OPEN_OR_BACKLOG_JQL} ORDER BY assignee ASC, status ASC`;
-    const out = [];
-    let startAt = 0;
-    const pageSize = 100;
-    for (let guard = 0; guard < 100; guard++) {
-      let data;
-      try {
-        data = await jiraJSON(`${BASE_URL}/rest/api/3/search/jql`, {
-          method: 'POST',
-          body: JSON.stringify({ jql, fields: issueFields(), maxResults: pageSize, startAt }),
-        });
-      } catch (e) {
-        const u = `${BASE_URL}/rest/api/3/search?jql=${encodeURIComponent(jql)}` +
-                  `&fields=${issueFields().join(',')}&maxResults=${pageSize}&startAt=${startAt}`;
-        data = await jiraJSON(u);
+    function enhancedPage(token) {
+      const body = { jql, fields: issueFields(), maxResults: 100 };
+      if (token) body.nextPageToken = token;
+      return jiraJSON(`${BASE_URL}/rest/api/3/search/jql`, { method: 'POST', body: JSON.stringify(body) });
+    }
+    function legacyPage(startAt) {
+      const u = `${BASE_URL}/rest/api/3/search?jql=${encodeURIComponent(jql)}` +
+                `&fields=${issueFields().join(',')}&maxResults=100&startAt=${startAt}`;
+      return jiraJSON(u);
+    }
+    let useEnhanced = true;
+    let first;
+    try {
+      first = await enhancedPage(null);
+    } catch (e) {
+      useEnhanced = false;
+      first = await legacyPage(0);
+    }
+    const out = (first.issues || []).slice();
+
+    if (useEnhanced) {
+      // Token-based: non c'è `total`, quindi sequenziale.
+      let token = first.nextPageToken;
+      for (let guard = 0; guard < 200 && token; guard++) {
+        const d = await enhancedPage(token);
+        out.push(...(d.issues || []));
+        token = d.nextPageToken;
       }
-      const issues = data.issues || [];
-      out.push(...issues);
-      const total = typeof data.total === 'number' ? data.total : out.length;
-      startAt += issues.length;
-      if (issues.length === 0 || startAt >= total) break;
+    } else {
+      const total = typeof first.total === 'number' ? first.total : null;
+      const step = (first.maxResults > 0 ? first.maxResults : out.length) || 100;
+      if (total != null && out.length > 0) {
+        const tasks = [];
+        for (let startAt = step; startAt < total; startAt += step) tasks.push(legacyPage(startAt));
+        if (tasks.length) {
+          const tP = now();
+          const results = await Promise.all(tasks);
+          tlog(`progetto: ${tasks.length} pagine extra in parallelo: ${ms(tP)}`);
+          for (const d of results) out.push(...(d.issues || []));
+        }
+      } else {
+        let startAt = out.length;
+        for (let guard = 0; guard < 100 && out.length > 0; guard++) {
+          const data = await legacyPage(startAt);
+          const issues = data.issues || [];
+          if (!issues.length) break;
+          out.push(...issues);
+          startAt += issues.length;
+          if (issues.length < step) break;
+        }
+      }
     }
     return out;
   }
 
   async function fetchIssues() {
+    const tAll = now();
     const { boardId, projectKey } = detectScope();
     dlog('scope', { boardId, projectKey });
+    const tSp = now();
     await resolveStoryPointField();
+    tlog(`risoluzione campo Story Points: ${ms(tSp)}`);
     let issues = null;
     if (boardId) {
-      try { issues = await fetchBoardIssues(boardId); }
+      const tB = now();
+      try { issues = await fetchBoardIssues(boardId); tlog(`fetch board #${boardId}: ${ms(tB)} · ${issues.length} issue`); }
       catch (e) { dwarn('board issues falliti, provo progetto', e); }
     }
-    if (issues == null && projectKey) issues = await fetchProjectIssues(projectKey);
+    if (issues == null && projectKey) {
+      const tP = now();
+      issues = await fetchProjectIssues(projectKey);
+      tlog(`fetch progetto ${projectKey}: ${ms(tP)} · ${issues.length} issue`);
+    }
     if (issues == null) {
       throw new Error('Impossibile determinare board o progetto dall\'URL. Apri la vista Backlog.');
     }
@@ -472,6 +547,7 @@
         it.__sprint = rawSprintOf(it) || null;
       }
     }
+    tlog(`fetchIssues totale: ${ms(tAll)} · ${kept.length} issue dopo i filtri`);
     return kept;
   }
 
@@ -597,6 +673,10 @@
 
   // ── Pannello (singleton) ──────────────────────────────────────────
   let backdrop = null;
+  // Cache dei dati tra chiusura e riapertura del pannello: evita di
+  // rifare le (lente) chiamate al BE. Si aggiorna solo col pulsante ↻.
+  let cachedIssues = null;   // ultime issue caricate
+  let cachedSprint = null;   // valore del filtro sprint scelto dall'utente
 
   function closePanel() {
     if (backdrop) { backdrop.remove(); backdrop = null; }
@@ -630,6 +710,16 @@
     if (empty) empty.style.display = visiblePeople === 0 ? '' : 'none';
   }
 
+  function setAllCollapsed(modal, collapsed) {
+    modal.querySelectorAll('.jira-bba-person').forEach(p => {
+      const list  = p.querySelector('.jira-bba-issues');
+      const caret = p.querySelector('.jira-bba-caret');
+      if (!list) return;
+      list.style.display = collapsed ? 'none' : '';
+      if (caret) caret.textContent = collapsed ? '▶' : '▼';
+    });
+  }
+
   async function openPanel() {
     if (backdrop) { closePanel(); return; }
 
@@ -644,6 +734,8 @@
           <input class="jira-bba-search" type="text" placeholder="Filtra assegnatario…">
           <label class="jira-bba-check"><input type="checkbox" class="jira-bba-only-wip"> Solo in corso</label>
           <label class="jira-bba-check"><input type="checkbox" class="jira-bba-only-stale"> Solo in corso da ≥${STALE_DAYS}g</label>
+          <button class="jira-bba-iconbtn jira-bba-expand-all" title="Espandi tutti gli assegnatari">⊞</button>
+          <button class="jira-bba-iconbtn jira-bba-collapse-all" title="Comprimi tutti gli assegnatari">⊟</button>
           <button class="jira-bba-iconbtn jira-bba-refresh" title="Ricarica">↻</button>
           <button class="jira-bba-iconbtn jira-bba-close" title="Chiudi (Esc)">✕</button>
         </div>
@@ -662,8 +754,10 @@
     modal.querySelector('.jira-bba-search').addEventListener('input', () => applyFilters(modal));
     modal.querySelector('.jira-bba-only-wip').addEventListener('change', () => applyFilters(modal));
     modal.querySelector('.jira-bba-only-stale').addEventListener('change', () => applyFilters(modal));
-    modal.querySelector('.jira-bba-sprint').addEventListener('change', () => render());
+    modal.querySelector('.jira-bba-sprint').addEventListener('change', () => { cachedSprint = sprintSel.value; render(); });
     modal.querySelector('.jira-bba-refresh').addEventListener('click', () => load());
+    modal.querySelector('.jira-bba-expand-all').addEventListener('click', () => setAllCollapsed(modal, false));
+    modal.querySelector('.jira-bba-collapse-all').addEventListener('click', () => setAllCollapsed(modal, true));
 
     // Delega: toggle collapse persona + apertura link in nuova scheda.
     body.addEventListener('click', (e) => {
@@ -685,8 +779,10 @@
       }
     });
 
-    let lastIssues = [];
-    let firstLoad = true;
+    let lastIssues = cachedIssues || [];
+    // Se c'è già una cache, non è il primo caricamento: conserviamo la
+    // scelta sprint dell'utente invece di forzare lo sprint attivo.
+    let firstLoad = cachedIssues ? false : true;
     const sprintSel = modal.querySelector('.jira-bba-sprint');
 
     // Popola il menu degli sprint dai dati caricati (attivi prima, poi
@@ -703,7 +799,7 @@
         if (rank(a) !== rank(b)) return rank(a) - rank(b);
         return (a.name || '').localeCompare(b.name || '', undefined, { numeric: true });
       });
-      const prev = sprintSel.value;
+      const prev = (cachedSprint != null) ? cachedSprint : sprintSel.value;
       const hasBacklog = issues.some(it => !sprintOf(it));
       sprintSel.innerHTML =
         '<option value="all">Attivi + futuri + backlog</option>' +
@@ -715,6 +811,7 @@
       } else if ([...sprintSel.options].some(o => o.value === prev)) {
         sprintSel.value = prev;
       }
+      cachedSprint = sprintSel.value;
     }
 
     function filterBySprint(issues) {
@@ -745,13 +842,16 @@
     }
 
     async function load() {
+      const t0 = now();
       body.innerHTML = '<div class="jira-bba-msg">⏳ Caricamento…</div>';
       summary.textContent = 'Carico le issue della board…';
       try {
         lastIssues = await fetchIssues();
+        cachedIssues = lastIssues;          // aggiorna la cache condivisa
         populateSprints(lastIssues);
         render();
         firstLoad = false;
+        tlog(`load() completo (fetch + render): ${ms(t0)}`);
       } catch (err) {
         console.error('[Jira BBA]', err);
         summary.textContent = 'Errore';
@@ -759,7 +859,15 @@
       }
     }
 
-    load();
+    // Riapertura: se ci sono già dati in cache li riusiamo subito (niente
+    // chiamate al BE); il pulsante ↻ forza comunque un aggiornamento.
+    if (cachedIssues) {
+      tlog(`riuso dati dalla cache (${cachedIssues.length} issue) · usa ↻ per aggiornare`);
+      populateSprints(lastIssues);
+      render();
+    } else {
+      load();
+    }
   }
 
   // ── Trigger: pulsante nella barra filtri, accanto ai filtri persona ─

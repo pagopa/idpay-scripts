@@ -36,13 +36,39 @@ Controlli nel pannello:
   attivo/futuro, o al solo **Backlog** (issue senza sprint). Ricalcola conteggi e
   raggruppamenti; gli sprint passati non compaiono mai.
 - **Ricerca** per nome assegnatario
+- **Espandi tutti / Comprimi tutti** (`⊞` / `⊟`): aprono o chiudono in un colpo
+  solo tutti gli accordion degli assegnatari, per mostrare o nascondere tutti i
+  task
 - **Solo in corso**: mostra solo persone e issue `In corso`
 - **Solo in corso da ≥Ng**: mostra solo persone e issue in corso da almeno N
   giorni
-- **Ricarica** e chiusura (anche con `Esc` o click sullo sfondo)
+- **Ricarica** (`↻`): rifà le chiamate al backend e aggiorna i dati
+- Chiusura con il pulsante `✕`, con `Esc` o click sullo sfondo. **Alla
+  riapertura i dati vengono riusati dalla cache** (nessuna nuova chiamata al
+  backend, apertura immediata): per aggiornarli usa il pulsante `↻`
 - **Click sulla key** → apre la issue in una **nuova scheda** (il pannello con i
   dati resta aperto nella scheda corrente); lo stesso vale per il **link al
   parent** e per il **link ai commenti** `💬`
+
+> **Prestazioni e cache:** il primo caricamento può essere lento (molte issue da
+> scaricare). I dati scaricati restano in **cache in memoria** finché la pagina
+> non viene ricaricata: chiudendo e riaprendo il pannello si rivede subito lo
+> stato precedente (sprint selezionato compreso) senza richiamare il backend.
+> Usa `↻` quando vuoi dati freschi. In **console** vengono stampati i tempi di
+> ogni chiamata con il prefisso `[Jira BBA ⏱]` (durata per singola richiesta,
+> per fase di fetch e totale `load()`), utili per capire cosa è più lento.
+>
+> **Ottimizzazioni del caricamento:**
+> - la **prima pagina** della board fa anche da test di supporto JQL: non viene
+>   più riscaricata (prima partiva una chiamata doppia e inutile);
+> - una volta noto il numero totale di issue, le **pagine successive vengono
+>   scaricate in parallelo** invece che in sequenza → meno attesa complessiva;
+> - l'id del campo *Story Points* (`/rest/api/3/field`) viene risolto **una sola
+>   volta** e riusato;
+> - i dati restano in **cache** finché non ricarichi la pagina (vedi sopra).
+>
+> Il campo `comment` (necessario al tag `💬`) aumenta il payload di ogni issue: se
+> il caricamento resta lento, è la voce più pesante da osservare nei log.
 
 > **Nota sul concetto di "fermo da N giorni":** NON usa il campo `updated` (che in
 > Jira cambia a *qualsiasi* modifica, commenti inclusi), ma
