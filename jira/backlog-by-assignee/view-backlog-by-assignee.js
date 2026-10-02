@@ -581,14 +581,13 @@
       if (sp != null) g.counts.sp += sp;
     }
     const groups = [...map.values()];
-    // Ordina le issue di ogni persona: prima In corso, poi Da fare, poi
-    // Completate; a parità, per key.
-    const catRank = { indeterminate: 0, new: 1, done: 2 };
+    // Ordina le issue di ogni persona per data di ultima modifica (updated) decrescente;
+    // a parità, per key.
     for (const g of groups) {
       g.issues.sort((x, y) => {
-        const rx = catRank[x.fields?.status?.statusCategory?.key] ?? 1;
-        const ry = catRank[y.fields?.status?.statusCategory?.key] ?? 1;
-        if (rx !== ry) return rx - ry;
+        const tx = new Date(x.fields?.updated || 0).getTime();
+        const ty = new Date(y.fields?.updated || 0).getTime();
+        if (tx !== ty) return ty - tx;
         return (x.key || '').localeCompare(y.key || '', undefined, { numeric: true });
       });
     }
@@ -650,9 +649,9 @@
     const spTotal = Math.round(c.sp * 10) / 10;
     // Ordine: Da fare, In corso, Completati, Somma, poi WIP e altri segnali.
     const badges = [
-      `<span class="jira-bba-badge todo" title="Da fare">${c.todo}</span>`,
+      `<span class="jira-bba-badge todo" title="Da fare">⏹ ${c.todo}</span>`,
       `<span class="jira-bba-badge inprogress" title="In corso">▶ ${c.inprogress}</span>`,
-      `<span class="jira-bba-badge done" title="Completati">${c.done}</span>`,
+      `<span class="jira-bba-badge done" title="Completati">✔ ${c.done}</span>`,
       `<span class="jira-bba-badge total" title="Totale assegnate">Σ ${c.total}</span>`,
       spTotal ? `<span class="jira-bba-badge sp" title="Story points totali (somma delle storie)">◆ ${spTotal}</span>` : '',
       wipWarn ? `<span class="jira-bba-badge wip-warn" title="WIP alto (≥ ${WIP_WARN} in corso)">⚠ WIP</span>` : '',
@@ -662,12 +661,12 @@
     return `
       <div class="jira-bba-person" data-bba-person="${esc(g.id)}" data-bba-name="${esc(g.name.toLowerCase())}" data-bba-inprogress="${c.inprogress}" data-bba-stale="${c.stale}">
         <div class="jira-bba-person-head">
-          <span class="jira-bba-caret">▼</span>
+          <span class="jira-bba-caret">▶</span>
           ${g.avatar ? `<img class="jira-bba-avatar" src="${esc(g.avatar)}" alt="">` : '<span class="jira-bba-avatar"></span>'}
           <span class="jira-bba-name">${esc(g.name)}</span>
           <span class="jira-bba-badges">${badges}</span>
         </div>
-        <div class="jira-bba-issues">${g.issues.map(issueRowHtml).join('')}</div>
+        <div class="jira-bba-issues" style="display:none">${g.issues.map(issueRowHtml).join('')}</div>
       </div>`;
   }
 
@@ -734,8 +733,8 @@
           <input class="jira-bba-search" type="text" placeholder="Filtra assegnatario…">
           <label class="jira-bba-check"><input type="checkbox" class="jira-bba-only-wip"> Solo in corso</label>
           <label class="jira-bba-check"><input type="checkbox" class="jira-bba-only-stale"> Solo in corso da ≥${STALE_DAYS}g</label>
-          <button class="jira-bba-iconbtn jira-bba-expand-all" title="Espandi tutti gli assegnatari">⊞</button>
-          <button class="jira-bba-iconbtn jira-bba-collapse-all" title="Comprimi tutti gli assegnatari">⊟</button>
+          <button class="jira-bba-iconbtn jira-bba-expand-all" title="Espandi tutti gli assegnatari">▼</button>
+          <button class="jira-bba-iconbtn jira-bba-collapse-all" title="Comprimi tutti gli assegnatari">▶</button>
           <button class="jira-bba-iconbtn jira-bba-refresh" title="Ricarica">↻</button>
           <button class="jira-bba-iconbtn jira-bba-close" title="Chiudi (Esc)">✕</button>
         </div>

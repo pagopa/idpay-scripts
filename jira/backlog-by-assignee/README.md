@@ -14,8 +14,8 @@ sulle issue **in corso**.
 Per ogni assegnatario mostra:
 
 - **Avatar e nome**
-- **Badge di conteggio**, in quest'ordine: `Da fare` / `▶ In corso` /
-  `Completati` / `Σ Totale` / `◆ SP` (story point totali delle storie), poi gli
+- **Badge di conteggio**, in quest'ordine: `⏹ Da fare` / `▶ In corso` /
+  `✔ Completati` / `Σ Totale` / `◆ SP` (story point totali delle storie), poi gli
   eventuali `⚠ WIP`, `🕒 N` (issue in corso da ≥ N giorni) e `💬 N` (issue con
   commenti nelle ultime 12h)
 - l'elenco delle sue issue (key cliccabile, tipo, titolo, stato), con:
@@ -36,7 +36,7 @@ Controlli nel pannello:
   attivo/futuro, o al solo **Backlog** (issue senza sprint). Ricalcola conteggi e
   raggruppamenti; gli sprint passati non compaiono mai.
 - **Ricerca** per nome assegnatario
-- **Espandi tutti / Comprimi tutti** (`⊞` / `⊟`): aprono o chiudono in un colpo
+- **Espandi tutti / Comprimi tutti** (`▼` / `▶`): aprono o chiudono in un colpo
   solo tutti gli accordion degli assegnatari, per mostrare o nascondere tutti i
   task
 - **Solo in corso**: mostra solo persone e issue `In corso`
@@ -135,8 +135,9 @@ Controlli nel pannello:
   3. assegna a ogni subtask lo **sprint effettivo del parent**, così il filtro per
      sprint lo raggruppa correttamente.
 - Raggruppa lato client per `assignee.accountId`, ordina gli assegnatari in
-  ordine alfabetico (`Non assegnato` in fondo) e ordina le issue di ciascuno
-  mettendo prima quelle **in corso**.
+  ordine alfabetico (`Non assegnato` in fondo) e ordina le issue di ciascuno per
+  **data di ultima modifica (`updated`) decrescente** (in alto le più recenti).
+  Tutti gli accordion degli assegnatari nascono **chiusi di default** per una vista sintetica.
 - Una issue conta come **in corso da ≥ N giorni** quando è *In corso*
   (`statusCategory = indeterminate`) e `statuscategorychangedate` (ingresso nello
   stato) è più vecchio di `STALE_DAYS` giorni (default 3, in cima allo script).
