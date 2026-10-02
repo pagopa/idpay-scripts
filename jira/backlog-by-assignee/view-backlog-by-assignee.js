@@ -182,6 +182,7 @@
         border-left-color: var(--ds-border-warning, #E2B203);
         background: var(--ds-background-warning, #FFF7D6);
       }
+      .jira-bba-issue.nested { padding-left: 60px; }
       .jira-bba-ip-tag {
         display: inline-flex; align-items: center; gap: 3px;
         padding: 1px 6px; border-radius: 10px;
@@ -584,15 +585,45 @@
       if (sp != null) g.counts.sp += sp;
     }
     const groups = [...map.values()];
-    // Ordina le issue di ogni persona per data di ultima modifica (updated) decrescente;
-    // a parità, per key.
+    // Ordina le issue di ogni persona:
+    //  1) i subtask il cui PADRE è nello stesso gruppo vengono agganciati
+    //     subito sotto al task padre (padre prima, poi i suoi subtask);
+    //  2) gli "ancoraggi" (task, e subtask orfani il cui padre non è qui)
+    //     sono ordinati per categoria di stato: Completati, In corso, In attesa;
+    //  3) a parità, per ultima modifica (updated) decrescente, poi per key.
+    const catRank = { done: 0, indeterminate: 1, new: 2 };
+    const byPriority = (x, y) => {
+      const rx = catRank[x.fields?.status?.statusCategory?.key] ?? 2;
+      const ry = catRank[y.fields?.status?.statusCategory?.key] ?? 2;
+      if (rx !== ry) return rx - ry;
+      const tx = new Date(x.fields?.updated || 0).getTime();
+      const ty = new Date(y.fields?.updated || 0).getTime();
+      if (tx !== ty) return ty - tx;
+      return (x.key || '').localeCompare(y.key || '', undefined, { numeric: true });
+    };
     for (const g of groups) {
-      g.issues.sort((x, y) => {
-        const tx = new Date(x.fields?.updated || 0).getTime();
-        const ty = new Date(y.fields?.updated || 0).getTime();
-        if (tx !== ty) return ty - tx;
-        return (x.key || '').localeCompare(y.key || '', undefined, { numeric: true });
-      });
+      const keySet = new Set(g.issues.map(it => it.key));
+      const childrenByParent = new Map();
+      const anchors = [];
+      for (const it of g.issues) {
+        const pk = isSubtask(it) ? it.fields?.parent?.key : null;
+        if (pk && keySet.has(pk)) {
+          if (!childrenByParent.has(pk)) childrenByParent.set(pk, []);
+          childrenByParent.get(pk).push(it);
+        } else {
+          anchors.push(it);
+        }
+      }
+      anchors.sort(byPriority);
+      for (const kids of childrenByParent.values()) kids.sort(byPriority);
+      const ordered = [];
+      for (const a of anchors) {
+        a.__nested = false;
+        ordered.push(a);
+        const kids = childrenByParent.get(a.key);
+        if (kids) { for (const k of kids) k.__nested = true; ordered.push(...kids); }
+      }
+      g.issues = ordered;
     }
     // Assegnatari in ordine alfabetico; "Non assegnato" sempre in fondo.
     groups.sort((a, b) => {
@@ -618,6 +649,7 @@
     const classes = ['jira-bba-issue'];
     if (cat === 'indeterminate') classes.push('inprogress');
     if (stale) classes.push('stale');
+    if (it.__nested) classes.push('nested');
     const parentTag = parentKey
       ? `<a class="jira-bba-parent-link" href="${BASE_URL}/browse/${esc(parentKey)}" target="_blank" rel="noopener" title="Apri la storia padre ${esc(parentKey)} in una nuova scheda">↳ ${esc(parentKey)}</a>`
       : '';

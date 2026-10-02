@@ -132,9 +132,13 @@ Controlli nel pannello:
   3. assegna a ogni subtask lo **sprint effettivo del parent**, così il filtro per
      sprint lo raggruppa correttamente.
 - Raggruppa lato client per `assignee.accountId`, ordina gli assegnatari in
-  ordine alfabetico (`Non assegnato` in fondo) e ordina le issue di ciascuno per
-  **data di ultima modifica (`updated`) decrescente** (in alto le più recenti).
-  Tutti gli accordion degli assegnatari nascono **chiusi di default** per una vista sintetica.
+  ordine alfabetico (`Non assegnato` in fondo). Le issue di ciascuno sono ordinate
+  per **categoria di stato** (prima i *Completati*, poi gli *In corso*, infine gli
+  *In attesa*); a parità per ultima modifica (`updated`) decrescente. I **subtask
+  il cui task padre è dello stesso assegnatario** vengono mostrati **subito sotto
+  al padre** (padre prima, poi i suoi subtask), così i gruppi imparentati restano
+  vicini. Tutti gli accordion degli assegnatari nascono **chiusi di default** per
+  una vista sintetica.
 - Una issue conta come **in corso da ≥ N giorni** quando è *In corso*
   (`statusCategory = indeterminate`) e `statuscategorychangedate` (ingresso nello
   stato) è più vecchio di `STALE_DAYS` giorni (default 3, in cima allo script).
