@@ -14,13 +14,10 @@ sulle issue **in corso**.
 Per ogni assegnatario mostra:
 
 - **Avatar e nome**
-- **Badge di conteggio**, in quest'ordine: `⏹ Da fare` / `▶ In corso` /
-  `✔ Completati` / `Σ Totale` / `◆ SP` (story point totali delle storie), poi gli
-  eventuali `⚠ WIP`, `🕒 N` (issue in corso da ≥ N giorni) e `💬 N` (issue con
-  commenti nelle ultime 12h)
-- l'elenco delle sue issue (key cliccabile, tipo, titolo, stato), con:
+- **Badge di conteggio**, nell'ordine: gli eventuali segnali `💬 N` (commenti nelle ultime 12h), `⚠ WIP` e `🕒 N` (in corso da ≥ N giorni), seguiti dai conteggi fissi `⏹ Da fare` / `▶ In corso` / `✔ Completati` / `Σ Totale` / `⚖️ SP` a destra
+- l'elenco delle sue issue (tipo, key, parent, titolo) con i badge a destra nell'ordine: notifica commento `💬`, tempo in corso `🕒 Ng`, stato, e all'estrema destra il badge Story Points `⚖️ N`:
   - le issue **in corso evidenziate**;
-  - un tag **`◆ N`** con gli **story point** della storia (i subtask spesso non ne
+  - un tag **`⚖️ N`** con gli **story point** della storia (i subtask spesso non ne
     hanno: in quel caso il tag non compare);
   - un tag **`🕒 Ng`** = **da quanti giorni la issue è entrata in "In corso"**
     (dall'ingresso nello stato, diventa giallo oltre la soglia);
@@ -150,8 +147,8 @@ Controlli nel pannello:
   (`?focusedCommentId=…`) in una nuova scheda.
 - Gli **story point** vengono letti da un campo custom specifico dell'istanza,
   rilevato a runtime da `/rest/api/3/field` (match su *Story point estimate* →
-  *Story points* → *story point*). Vengono mostrati per singola storia (`◆ N`) e
-  sommati per persona (`◆ SP`). I subtask di solito non hanno story point.
+  *Story points* → *story point*). Vengono mostrati per singola storia (`⚖️ N`) e
+  sommati per persona (`⚖️ SP`). I subtask di solito non hanno story point.
 - Al caricamento il filtro sprint è impostato sullo **sprint attivo**; il
   **filtro per sprint** usa il campo `sprint` (effettivo, ereditato dal parent per
   i subtask): ri-filtra il set caricato e ri-raggruppa, così i conteggi restano

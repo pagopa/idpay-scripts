@@ -161,8 +161,8 @@
       .jira-bba-badge.inprogress { background: var(--ds-background-information, #E9F2FF); color: var(--ds-text-information, #0055CC); }
       .jira-bba-badge.todo       { background: var(--ds-background-neutral, #DCDFE4);     color: var(--ds-text, #172B4D); }
       .jira-bba-badge.done       { background: var(--ds-background-success, #DCFFF1);     color: var(--ds-text-success, #216E4E); }
-      .jira-bba-badge.total      { background: transparent; border: 1px solid var(--ds-border, #C1C7D0); color: var(--ds-text-subtle, #44546F); }
-      .jira-bba-badge.sp         { background: var(--ds-background-discovery-bold, #6E5DC6); color: var(--ds-text-inverse, #FFFFFF); }
+      .jira-bba-badge.total,
+      .jira-bba-badge.sp         { background: transparent; border: 1px solid var(--ds-border, #C1C7D0); color: var(--ds-text-subtle, #44546F); }
       .jira-bba-badge.wip-warn   { background: var(--ds-background-warning, #FFF7D6);     color: var(--ds-text-warning, #974F0C); }
       .jira-bba-badge.stale      { background: var(--ds-background-warning-bold, #E2B203); color: var(--ds-text-inverse, #172B4D); }
       .jira-bba-badge.comments   { background: var(--ds-background-discovery, #F3F0FF);   color: var(--ds-text-discovery, #5E4DB2); }
@@ -198,6 +198,9 @@
         font-size: 12px; white-space: nowrap; text-decoration: none; cursor: pointer;
       }
       .jira-bba-comment-link:hover { filter: brightness(.9); }
+      .jira-bba-sp-slot {
+        min-width: 48px; display: inline-flex; align-items: center; justify-content: flex-end; flex-shrink: 0;
+      }
       .jira-bba-sp-tag {
         display: inline-flex; align-items: center; gap: 2px;
         padding: 1px 6px; border-radius: 10px;
@@ -618,9 +621,6 @@
     const parentTag = parentKey
       ? `<a class="jira-bba-parent-link" href="${BASE_URL}/browse/${esc(parentKey)}" target="_blank" rel="noopener" title="Apri la storia padre ${esc(parentKey)} in una nuova scheda">↳ ${esc(parentKey)}</a>`
       : '';
-    const spTag = sp != null
-      ? `<span class="jira-bba-sp-tag" title="Story points">◆ ${sp}</span>`
-      : '';
     const ipTag = ipDays != null
       ? `<span class="jira-bba-ip-tag${stale ? ' warn' : ''}" title="In corso da ${ipDays} giorni (dall'ingresso nello stato)">🕒 ${ipDays}g</span>`
       : '';
@@ -630,16 +630,17 @@
       const href = `${BASE_URL}/browse/${esc(it.key)}` + (cm && cm.id ? `?focusedCommentId=${esc(cm.id)}` : '');
       commentTag = `<a class="jira-bba-comment-link" href="${href}" target="_blank" rel="noopener" title="Apri i commenti (nuovo nelle ultime ${COMMENT_HOURS} ore) in una nuova scheda">💬</a>`;
     }
+    const spSlot = `<span class="jira-bba-sp-slot">${sp != null ? `<span class="jira-bba-sp-tag" title="Story points">⚖️ ${sp}</span>` : ''}</span>`;
     return `
       <div class="${classes.join(' ')}" data-bba-stale="${stale ? '1' : '0'}" data-bba-comment="${recentComment ? '1' : '0'}">
         ${typeIcon ? `<img class="jira-bba-type" src="${esc(typeIcon)}" alt="${esc(f.issuetype?.name)}" title="${esc(f.issuetype?.name)}">` : '<span class="jira-bba-type"></span>'}
         <a class="jira-bba-key" href="${BASE_URL}/browse/${esc(it.key)}" target="_blank" rel="noopener" data-bba-issue="${esc(it.key)}">${esc(it.key)}</a>
         ${parentTag}
         <span class="jira-bba-sum" title="${esc(f.summary)}">${esc(f.summary || '—')}</span>
-        ${spTag}
         ${commentTag}
         ${ipTag}
         <span class="jira-bba-status" style="background:${bg};color:${fg}">${esc(f.status?.name || '—')}</span>
+        ${spSlot}
       </div>`;
   }
 
@@ -647,16 +648,16 @@
     const c = g.counts;
     const wipWarn = c.inprogress >= WIP_WARN;
     const spTotal = Math.round(c.sp * 10) / 10;
-    // Ordine: Da fare, In corso, Completati, Somma, poi WIP e altri segnali.
+    // Ordine: Commenti, WIP, Ritardo (segnali), poi Da fare, In corso, Completati, Totale (conteggi base a destra), SP.
     const badges = [
+      c.comments ? `<span class="jira-bba-badge comments" title="Issue con commenti nelle ultime ${COMMENT_HOURS} ore">💬 ${c.comments}</span>` : '',
+      wipWarn ? `<span class="jira-bba-badge wip-warn" title="WIP alto (≥ ${WIP_WARN} in corso)">⚠ WIP</span>` : '',
+      c.stale ? `<span class="jira-bba-badge stale" title="Issue in corso da ≥ ${STALE_DAYS} giorni">🕒 ${c.stale}</span>` : '',
       `<span class="jira-bba-badge todo" title="Da fare">⏹ ${c.todo}</span>`,
       `<span class="jira-bba-badge inprogress" title="In corso">▶ ${c.inprogress}</span>`,
       `<span class="jira-bba-badge done" title="Completati">✔ ${c.done}</span>`,
       `<span class="jira-bba-badge total" title="Totale assegnate">Σ ${c.total}</span>`,
-      spTotal ? `<span class="jira-bba-badge sp" title="Story points totali (somma delle storie)">◆ ${spTotal}</span>` : '',
-      wipWarn ? `<span class="jira-bba-badge wip-warn" title="WIP alto (≥ ${WIP_WARN} in corso)">⚠ WIP</span>` : '',
-      c.stale ? `<span class="jira-bba-badge stale" title="Issue in corso da ≥ ${STALE_DAYS} giorni">🕒 ${c.stale}</span>` : '',
-      c.comments ? `<span class="jira-bba-badge comments" title="Issue con commenti nelle ultime ${COMMENT_HOURS} ore">💬 ${c.comments}</span>` : '',
+      `<span class="jira-bba-badge sp" title="Story points totali (somma delle storie)">⚖️ ${spTotal}</span>`,
     ].join('');
     return `
       <div class="jira-bba-person" data-bba-person="${esc(g.id)}" data-bba-name="${esc(g.name.toLowerCase())}" data-bba-inprogress="${c.inprogress}" data-bba-stale="${c.stale}">
