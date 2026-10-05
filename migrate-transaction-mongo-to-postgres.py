@@ -1,8 +1,8 @@
-import json
 import psycopg2
 from psycopg2 import extras
-from datetime import datetime
+from datetime import datetime, timezone
 import ijson  # Ottimo per leggere array JSON enormi riga per riga
+from zoneinfo import ZoneInfo
 
 # 1. Configurazione connessione Postgres
 conn = psycopg2.connect(
@@ -17,34 +17,78 @@ cursor = conn.cursor()
 
 extras.register_default_jsonb(conn_or_curs=conn)
 
-# 2. Funzione per normalizzare i dati di MongoDB/Cosmos
-def clean_val(val, val_type=None):
-  if val is None:
-    return None
+ROME = ZoneInfo("Europe/Rome")
 
-  # Gestione dei tipi speciali di MongoDB
+
+def parse_mongo_date(val):
+  if isinstance(val, dict) and "$date" in val:
+    val = val["$date"]
+
+  if isinstance(val, dict) and "$numberLong" in val:
+    val = int(val["$numberLong"])
+
+  if isinstance(val, (int, float)):
+    parsed = datetime.fromtimestamp(val / 1000, tz=timezone.utc)
+  elif isinstance(val, str):
+    parsed = datetime.fromisoformat(val.replace("Z", "+00:00"))
+  else:
+    raise TypeError(f"Unsupported Mongo date value: {type(val).__name__}")
+
+  if parsed.tzinfo is None:
+    parsed = parsed.replace(tzinfo=timezone.utc)
+
+  return parsed.astimezone(ROME)
+
+
+def normalize_extended_json(val):
   if isinstance(val, dict):
-    if "$date" in val:
-      return val["$date"]  # Postgres accetta le stringhe ISO come TIMESTAMPTZ
-    if "$numberLong" in val:
+    if len(val) == 1 and "$numberLong" in val:
       return int(val["$numberLong"])
-    # Se è un altro dizionario/array (es. additionalProperties, initiatives), lo passiamo come JSON
-    return json.dumps(val)
+    if len(val) == 1 and "$numberInt" in val:
+      return int(val["$numberInt"])
+    if len(val) == 1 and "$numberDouble" in val:
+      return float(val["$numberDouble"])
+    if len(val) == 1 and "$date" in val:
+      return parse_mongo_date(val).isoformat()
+    return {key: normalize_extended_json(value) for key, value in val.items()}
 
   if isinstance(val, list):
-    return json.dumps(val)  # Mappa gli array JSONB di Postgres
+    return [normalize_extended_json(value) for value in val]
 
   return val
 
 
-def to_jsonb(val):
-  """Forza psycopg2 a mappare list o dict come JSONB per Postgres"""
+def clean_val(val):
+  return normalize_extended_json(val)
+
+
+def clean_timestamp(val, preserve_timezone):
   if val is None:
     return None
-  # extras.Json serializza automaticamente sia dict che list in formato JSON compatibile
-  return extras.Json(val)
 
-# 3. Leggi il dump esportato da MongoDB (es. esportato con mongoexport)
+  parsed = parse_mongo_date(val)
+  return parsed if preserve_timezone else parsed.replace(tzinfo=None)
+
+
+def extract_product_type(doc):
+  product_type = doc.get("productType")
+  if product_type is not None:
+    return product_type
+
+  additional_properties = doc.get("additionalProperties")
+  if isinstance(additional_properties, dict):
+    return additional_properties.get("productType")
+
+  return None
+
+
+def to_jsonb(val):
+  """Normalize Mongo Extended JSON before adapting a value as PostgreSQL JSONB."""
+  if val is None:
+    return None
+  return extras.Json(normalize_extended_json(val))
+
+# 2. Leggi il dump esportato da MongoDB (es. esportato con mongoexport)
 # mongoexport --db=nomedb --collection=transaction --out=dump.json
 batch_size = 5000
 buffer = []
@@ -52,13 +96,14 @@ buffer = []
 insert_query = """
 INSERT INTO "idpay-pagamenti".transaction (
     id, "trxCode", "operationType", "operationTypeTranscoded", status, 
-    "trxDate", "trxChargeDate", "trxEndDate", "updateDate", "userId", 
+    "trxDate", "trxChargeDate", "trxEndDate", "elaborationDateTime", "updateDate", "userId", 
     "merchantId", "acquirerId", "pointOfSaleId", "amountCents", "effectiveAmountCents", 
     "voucherAmountCents", "amountCurrency", channel, "initiativeId", "initiativeName", 
-    initiatives, "businessName", "correlationId", "idTrxAcquirer", "merchantFiscalCode", 
-    vat, "additionalProperties", mcc, "idTrxIssuer", "extendedAuthorization", "counterVersion",
-    "franchiseName", "pointOfSaleType", "familyId", "rewardCents", "rejectionReasons", 
-    "initiativeRejectionReasons", rewards
+    initiatives, "businessName", "franchiseName", "invoiceData", "creditNoteData",
+    "correlationId", "createdAt", "idTrxAcquirer", "merchantFiscalCode", vat,
+    "pointOfSaleType", "productType", "familyId", "rewardCents", "counterVersion",
+    "transactionRevision", "rewards", "rejectionReasons", "initiativeRejectionReasons",
+    "additionalProperties", mcc, "idTrxIssuer", "extendedAuthorization"
 ) VALUES %s
 ON CONFLICT (id) DO NOTHING;
 """
@@ -73,10 +118,11 @@ with open("dumpvoucher.json", "rb") as f:
       doc.get("operationType"),
       doc.get("operationTypeTranscoded"),
       doc.get("status"),
-      clean_val(doc.get("trxDate")),
-      clean_val(doc.get("trxChargeDate")),
-      clean_val(doc.get("trxEndDate")),
-      clean_val(doc.get("updateDate")),
+      clean_timestamp(doc.get("trxDate"), preserve_timezone=True),
+      clean_timestamp(doc.get("trxChargeDate"), preserve_timezone=True),
+      clean_timestamp(doc.get("trxEndDate"), preserve_timezone=True),
+      clean_timestamp(doc.get("elaborationDateTime"), preserve_timezone=False),
+      clean_timestamp(doc.get("updateDate"), preserve_timezone=False),
       doc.get("userId"),
       doc.get("merchantId"),
       doc.get("acquirerId"),
@@ -93,22 +139,27 @@ with open("dumpvoucher.json", "rb") as f:
       doc.get("initiativeName"),
       to_jsonb(doc.get("initiatives")),
       doc.get("businessName"),
+      doc.get("franchiseName"),
+      to_jsonb(doc.get("invoiceData")),
+      to_jsonb(doc.get("creditNoteData")),
       doc.get("correlationId"),
+      clean_timestamp(doc.get("createdAt"), preserve_timezone=False),
       doc.get("idTrxAcquirer"),
       doc.get("merchantFiscalCode"),
       doc.get("vat"),
+      doc.get("pointOfSaleType"),
+      extract_product_type(doc),
+      doc.get("familyId"),
+      clean_val(doc.get("rewardCents")),
+      clean_val(doc.get("counterVersion")),
+      0,
+      to_jsonb(doc.get("rewards")),
+      to_jsonb(doc.get("rejectionReasons")),
+      to_jsonb(doc.get("initiativeRejectionReasons")),
       to_jsonb(doc.get("additionalProperties")),
       doc.get("mcc"),
       doc.get("idTrxIssuer"),
-      doc.get("extendedAuthorization"),
-      clean_val(doc.get("counterVersion")),
-      doc.get("franchiseName"),
-      doc.get("pointOfSaleType"),
-      doc.get("familyId"),
-      clean_val(doc.get("rewardCents")),
-      to_jsonb(doc.get("rejectionReasons")),
-      to_jsonb(doc.get("initiativeRejectionReasons")),
-      to_jsonb(doc.get("rewards"))
+      doc.get("extendedAuthorization")
     )
     buffer.append(row)
 
