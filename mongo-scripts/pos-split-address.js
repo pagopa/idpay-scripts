@@ -5,7 +5,14 @@ const MODE = "preview"; // "preview" oppure "execute"
 const targetDb = db.getSiblingDB("idpay-pagamenti");
 const col = targetDb.getCollection("point_of_sales");
 
-const docs = col.find({ address: { $exists: true, $ne: null } }).toArray();
+const docs = col.find({
+  address: { $exists: true, $ne: null },
+  $or: [
+    { streetNumber: { $exists: false } },
+    { streetNumber: null },
+    { streetNumber: "" }
+  ]
+}).toArray();
 
 print(`\nModalità: ${MODE.toUpperCase()}`);
 print(`Documenti trovati: ${docs.length}`);
@@ -15,6 +22,7 @@ let updated = 0;
 let skipped = 0;
 
 docs.forEach(doc => {
+
   const fullAddress = doc.address;
   const lastComma = fullAddress.lastIndexOf(",");
 
@@ -30,11 +38,21 @@ docs.forEach(doc => {
   }
 
   if (MODE === "execute") {
-    col.updateOne(
-      { _id: doc._id },
-      { $set: { address: streetName, streetNumber: streetNumber } }
-    );
-    print(`OK [${doc._id}] "${fullAddress}" → "${streetName}" | "${streetNumber}"`);
+    // I log before update to handle constraint errors
+    print(`UPDATING [${doc._id}] "${fullAddress}" → "${streetName}" | "${streetNumber}"`);
+
+    const ordered = {};
+    Object.keys(doc).forEach(key => {
+      if (key === "streetNumber") {
+        return;
+      }
+      ordered[key] = key === "address" ? streetName : doc[key];
+      if (key === "address") {
+        ordered.streetNumber = streetNumber;
+      }
+    });
+
+    col.replaceOne({ _id: doc._id }, ordered);
     updated++;
   }
 });
